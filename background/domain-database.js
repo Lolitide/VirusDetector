@@ -534,7 +534,7 @@ const DOMAIN_DATABASE = [
   },
   {
     name: 'Kimi',
-    officialDomains: ['kimi.moonshot.cn'],
+    officialDomains: ['kimi.moonshot.cn','kimi.com'],
     correctUrl: 'https://www.kimi.com',
     category: SOFTWARE_CATEGORIES.AI_CHAT,
     keywords: ['Kimi', 'kimi', 'moonshot'],
