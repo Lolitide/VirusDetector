@@ -1008,10 +1008,10 @@ const DOMAIN_DATABASE = [
   },
   {
     name: 'AK加速器',
-    officialDomains: ['akjsq.com', 'ak加速器.com'],
-    correctUrl: 'https://www.akjsq.com',
+    officialDomains: ['akspeedy.com', 'ak加速器.com'],
+    correctUrl: 'https://www.akspeedy.com',
     category: SOFTWARE_CATEGORIES.GAME_ACCELERATOR,
-    keywords: ['AK加速器', 'akjsq'],
+    keywords: ['AK加速器', 'akspeedy'],
     isChineseBrand: true
   },
 
