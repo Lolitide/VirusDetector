@@ -800,6 +800,14 @@ const DOMAIN_DATABASE = [
     keywords: ['V2EX', 'v2ex'],
     isChineseBrand: false
   },
+  {
+    name: 'Github',
+    officialDomains: ['github.com'],
+    correctUrl: 'https://www.github.com',
+    category: SOFTWARE_CATEGORIES.DEVELOPER,
+    keywords: ['Github'],
+    isChineseBrand: false
+  },
 
   // ========== 系统工具 ==========
   {
@@ -856,14 +864,6 @@ const DOMAIN_DATABASE = [
     correctUrl: 'https://anydesk.com',
     category: SOFTWARE_CATEGORIES.SYSTEM_TOOL,
     keywords: ['AnyDesk', 'anydesk', '远程桌面'],
-    isChineseBrand: false
-  },
-  {
-    name: 'Github',
-    officialDomains: ['github.com'],
-    correctUrl: 'https://www.github.com',
-    category: SOFTWARE_CATEGORIES.DEVELOPER,
-    keywords: ['Github'],
     isChineseBrand: false
   },
 
