@@ -1,7 +1,15 @@
 import { MSG_TYPES } from './constants.js';
 
 /**
- * 消息通信工具 - 标准化消息格式和发送/接收
+ * Virus Detector — 消息通信封装
+ *
+ * 对 chrome.runtime.sendMessage / onMessage 的轻量封装，
+ * 提供标准化的消息信封格式和类型安全的收发方法。
+ *
+ * @module messaging
+ * @version 2.2.4
+ *
+ * 消息信封结构：{ type: string, payload: any, tabId: number, timestamp: number }
  */
 export class Messaging {
   /**

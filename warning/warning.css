@@ -57,7 +57,9 @@ body {
 .tips-section li::before { content:'•'; position:absolute; left:6px; color:#ff5252; font-weight:bold; }
 
 /* ===== 底部按钮 ===== */
-.actions { padding: 16px 24px 24px; display: flex; gap: 12px; }
+.actions { padding: 16px 24px 8px; display: flex; gap: 12px; }
+.auto-close-countdown { padding: 0 24px 20px; text-align: center; color: #9e9e9e;
+  font-size: 12px; min-height: 16px; }
 .btn-secondary, .btn-primary { flex:1; padding: 10px 16px; border:none; border-radius: 6px;
   font-size: 13px; font-weight: 600; cursor: pointer; transition: opacity 0.2s; }
 .btn-secondary { background: #333; color: #ccc; }

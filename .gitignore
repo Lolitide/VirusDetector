@@ -11,3 +11,6 @@ Thumbs.db
 # Archive files
 *.zip
 *.rar
+
+# Test log files
+VirusDetectorLog/
