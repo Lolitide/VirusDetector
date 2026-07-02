@@ -594,3 +594,90 @@ body {
   font-weight: 400;
   margin-top: 4px;
 }
+
+/* ===== AI Result Card ===== */
+#ai-result-section {
+  margin-bottom: 12px;
+}
+
+.ai-result-card {
+  background: linear-gradient(135deg, rgba(124, 77, 255, 0.08), rgba(124, 77, 255, 0.03));
+  border: 1px solid rgba(124, 77, 255, 0.2);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.ai-result-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #b388ff;
+  background: rgba(124, 77, 255, 0.08);
+  border-bottom: 1px solid rgba(124, 77, 255, 0.1);
+}
+
+.ai-badge {
+  margin-left: auto;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.ai-badge.ai-badge-danger {
+  background: rgba(244, 67, 54, 0.2);
+  color: #ef5350;
+}
+
+.ai-badge.ai-badge-safe {
+  background: rgba(76, 175, 80, 0.2);
+  color: #66bb6a;
+}
+
+.ai-badge.ai-badge-neutral {
+  background: rgba(158, 158, 158, 0.2);
+  color: #bdbdbd;
+}
+
+.ai-result-body {
+  padding: 10px 14px;
+}
+
+.ai-result-row {
+  display: flex;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 12px;
+}
+
+.ai-label {
+  color: var(--text2);
+  flex-shrink: 0;
+  min-width: 60px;
+}
+
+.ai-value {
+  color: var(--text);
+  word-break: break-word;
+}
+
+.reason-row .ai-value {
+  color: var(--text2);
+  font-style: italic;
+  line-height: 1.5;
+}
+
+/* ===== Config Button ===== */
+#config-btn {
+  border-color: var(--border);
+  color: var(--text2);
+}
+
+#config-btn:hover {
+  background: var(--bg3);
+  color: var(--text);
+  border-color: var(--blue);
+}

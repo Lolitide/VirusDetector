@@ -27,6 +27,43 @@
     document.getElementById('official-btn').href = correctUrl;
   }
 
+  // AI 分析结果（从 URL 参数读取）
+  const aiRaw = params.get('ai');
+  if (aiRaw) {
+    try {
+      const ai = JSON.parse(aiRaw);
+      const section = document.getElementById('ai-section');
+      const isPhishing = ai.p === 1 ? true : (ai.p === 0 ? false : null);
+      const confidence = ai.c || 0;
+      const brand = ai.b || '';
+      const reasoning = ai.r || '';
+
+      section.style.display = 'block';
+
+      const badge = document.getElementById('ai-badge');
+      if (isPhishing === true) {
+        badge.textContent = '钓鱼 ' + confidence + '%';
+        badge.className = 'ai-badge ai-badge-danger';
+      } else if (isPhishing === false) {
+        badge.textContent = '安全 ' + confidence + '%';
+        badge.className = 'ai-badge ai-badge-safe';
+      } else {
+        badge.textContent = confidence + '%';
+        badge.className = 'ai-badge';
+      }
+
+      if (brand) {
+        document.getElementById('ai-brand-row-warning').style.display = 'flex';
+        document.getElementById('ai-brand-warning').textContent = brand;
+      }
+
+      document.getElementById('ai-confidence-warning').textContent = confidence + '%';
+      document.getElementById('ai-reasoning-warning').textContent = reasoning || '无';
+    } catch (e) {
+      console.warn('[Warning] AI 参数解析失败:', e);
+    }
+  }
+
   /**
    * 关闭匹配危险域名的所有标签页
    * @param {string} targetDomain - 需要关闭的域名

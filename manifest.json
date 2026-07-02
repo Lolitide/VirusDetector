@@ -18,6 +18,8 @@
     "<all_urls>"
   ],
 
+  "options_page": "config/config.html",
+
   "background": {
     "service_worker": "background/service-worker.js",
     "type": "module"

@@ -66,3 +66,18 @@ body {
 .btn-secondary:hover { opacity: 0.85; }
 .btn-primary { background: #1565C0; color: #fff; }
 .btn-primary:hover { opacity: 0.9; }
+
+/* ===== AI 分析 ===== */
+.ai-section { margin: 12px 24px; background: rgba(124, 77, 255, 0.06);
+  border: 1px solid rgba(124, 77, 255, 0.15); border-radius: 8px; overflow: hidden; }
+.ai-header { display: flex; align-items: center; gap: 6px; padding: 10px 14px;
+  font-size: 13px; font-weight: 600; color: #b388ff;
+  background: rgba(124, 77, 255, 0.06); border-bottom: 1px solid rgba(124, 77, 255, 0.1); }
+.ai-header .ai-badge { margin-left: auto; padding: 2px 8px; border-radius: 10px; font-size: 11px; }
+.ai-badge-danger { background: rgba(244, 67, 54, 0.2); color: #ef5350; }
+.ai-badge-safe { background: rgba(76, 175, 80, 0.2); color: #66bb6a; }
+.ai-body { padding: 10px 14px; }
+.ai-row { display: flex; gap: 8px; padding: 3px 0; font-size: 12px; }
+.ai-row .ai-label { color: #888; flex-shrink: 0; min-width: 60px; }
+.ai-row .ai-value { color: #e0e0e0; word-break: break-word; }
+.ai-row .ai-reason { color: #aaa; font-style: italic; line-height: 1.5; }

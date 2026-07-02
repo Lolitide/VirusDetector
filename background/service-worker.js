@@ -23,10 +23,13 @@ import { ScoringEngine } from './scoring-engine.js';
 import { DomainDatabase } from './domain-database.js';
 import { CacheManager } from './cache-manager.js';
 import { registerNonChineseBrandDomains } from './icp-utils.js';
+import { AiDetector } from './ai-detector.js';
 import { UrlUtils } from '../utils/url-utils.js';
 import {
   SCORE_THRESHOLD, RISK_LEVEL, MSG_TYPES,
-  STORAGE_KEYS, CACHE_TTL
+  STORAGE_KEYS, CACHE_TTL,
+  AI_TRIGGER_MIN_SCORE, AI_TRIGGER_MAX_SCORE,
+  AI_MSG_TYPES, AI_STORAGE_KEY
 } from '../utils/constants.js';
 
 // ==================== URL 协议守卫 ====================
@@ -128,7 +131,9 @@ function createTabState() {
     },
     pageText: '', icpStrings: [], pageMetrics: null, linkMetrics: null,
     downloadState: { hasDownloadedArchive: false, archiveFileName: null },
-    lastAnalyzed: 0
+    lastAnalyzed: 0,
+    aiResult: null,
+    aiPending: false
   };
 }
 
@@ -494,6 +499,18 @@ function openWarningWindow(tabState) {
     officialName: tabState.officialName || ''
   });
 
+  if (tabState.aiResult) {
+    try {
+      const aiCompact = {
+        p: tabState.aiResult.isPhishing === true ? 1 : (tabState.aiResult.isPhishing === false ? 0 : -1),
+        c: tabState.aiResult.confidence || 0,
+        b: tabState.aiResult.impersonatingBrand || '',
+        r: (tabState.aiResult.reasoning || '').substring(0, 300)
+      };
+      params.set('ai', JSON.stringify(aiCompact));
+    } catch (e) { /* ignore AI data in URL */ }
+  }
+
   chrome.windows.create({
     url: chrome.runtime.getURL('warning/warning.html?' + params.toString()),
     type: 'popup',
@@ -596,26 +613,76 @@ async function analyzePage(tabId, url, domain, pageMetrics, linkMetrics) {
     if (pageMetrics) tabState.pageMetrics = pageMetrics;
     if (linkMetrics) tabState.linkMetrics = linkMetrics;
 
+    // 先记录初始结果并保存（使弹窗能立即显示，同时标记 AI 可能尚未完成）
+    tabState.score = evalResult.totalScore;
+    tabState.riskLevel = evalResult.riskLevel;
+    tabState.isAnalyzed = true;
+    tabState.lastAnalyzed = Date.now();
+    tabState.aiPending = false;
+    await saveTabState(tabId, tabState);
+
+    let finalScore = evalResult.totalScore;
+
+    // AI 二次分析（分数 >= 40 时触发，调整后再覆盖保存）
+    const shouldRunAI = evalResult.totalScore >= AI_TRIGGER_MIN_SCORE
+      && evalResult.totalScore < AI_TRIGGER_MAX_SCORE;
+    if (shouldRunAI) {
+      try {
+        // 标记 AI 进行中，让弹窗显示等待状态
+        tabState.aiPending = true;
+        await saveTabState(tabId, tabState);
+
+        const aiSettings = await chrome.storage.local.get(AI_STORAGE_KEY);
+        const aiConfig = aiSettings[AI_STORAGE_KEY];
+        if (aiConfig && aiConfig.provider && aiConfig.provider !== 'disabled') {
+          const whoisResult = evalResult.breakdown.domainAge;
+          const aiCtx = {
+            whois: whoisResult.creationDays >= 0 ? { creationDays: whoisResult.creationDays } : null,
+            icpStatus: evalResult.breakdown.rule3.icpFound ? '已检测到备案号' :
+                       evalResult.breakdown.rule3.status === 'pass' ? '官方网站/外国站点' : '未检测到备案号',
+            ruleSummary: `规则一:${evalResult.breakdown.rule1.score} 规则二:${evalResult.breakdown.rule2.score} 规则三:${evalResult.breakdown.rule3.score} 规则四:${evalResult.breakdown.rule4.score} 规则五:${evalResult.breakdown.rule5.score} 域名年龄:${evalResult.breakdown.domainAge.score}`
+          };
+
+          const aiResult = await AiDetector.analyze(domain, aiCtx, tabId);
+          tabState.aiResult = aiResult;
+
+          if (aiResult && typeof aiResult.scoreAdjustment === 'number') {
+            finalScore = Math.max(0, Math.min(evalResult.totalScore + aiResult.scoreAdjustment,
+              evalResult.totalScore + 40));
+          }
+
+          console.log('[ServiceWorker] AI 分析完成:', aiResult);
+        }
+      } catch (aiErr) {
+        console.error('[ServiceWorker] AI 分析异常:', aiErr);
+      } finally {
+        tabState.aiPending = false;
+      }
+    }
+
+    // 覆盖保存最终分数（AI 调整后，弹窗读取到此即为最终结果）
+    tabState.score = finalScore;
+    tabState.riskLevel = finalScore >= SCORE_THRESHOLD ? RISK_LEVEL.WARNING : RISK_LEVEL.SAFE;
     await saveTabState(tabId, tabState);
 
     // 写入缓存（清洗瞬时事件数据，防止缓存污染）
     await CacheManager.set(domain, {
-      score: evalResult.totalScore,
+      score: finalScore,
       isMalicious: evalResult.isSuspicious,
       correctUrl: evalResult.correctUrl,
       ruleResults: sanitizeRuleResultsForCache(evalResult.breakdown)
     });
 
-    // 根据分数执行响应
-    if (evalResult.totalScore >= SCORE_THRESHOLD) {
+    if (finalScore >= SCORE_THRESHOLD) {
       await triggerWarningFlow(tabId, tabState);
     } else {
-      setIconGreen(tabId, evalResult.totalScore);
+      setIconGreen(tabId, finalScore);
     }
 
     console.log('[ServiceWorker] 分析完成:', {
-      domain, score: evalResult.totalScore,
-      riskLevel: evalResult.riskLevel, cached: false
+      domain, score: finalScore,
+      riskLevel: tabState.riskLevel, cached: false,
+      aiAdjusted: finalScore !== evalResult.totalScore
     });
 
   } catch (error) {
@@ -732,11 +799,32 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
 
     tabState.ruleResults.rule2 = rule2Result;
 
+    // 初步分数（不含 Whois 查询），先判断是否需要立即拦截
+    const preWhoisScore = Object.values(tabState.ruleResults)
+      .reduce((sum, r) => sum + (r.score || 0), 0);
+    let cancelled = false;
+    if (preWhoisScore >= SCORE_THRESHOLD) {
+      try {
+        await chrome.downloads.cancel(downloadItem.id);
+        console.log('[ServiceWorker] 已提前取消危险下载（Whios 前）:', downloadItem.filename);
+        cancelled = true;
+      } catch (e) {
+        console.warn('[ServiceWorker] 提前取消下载失败:', e.message);
+      }
+    }
+
     // 下载链接跨域检测（Whois API）：检查下载链接域名是否跨域及是否为新建域名
-    const downloadLinkResult = await ScoringEngine.evaluateDownloadLink(
+    // 使用超时（2 秒），避免 Whois 网络请求阻塞拦截
+    const downloadLinkPromise = ScoringEngine.evaluateDownloadLink(
       downloadItem.url || '', tabState.domain || ''
     );
-    tabState.ruleResults.downloadLink = downloadLinkResult;
+    const timeoutPromise = new Promise(resolve => setTimeout(resolve, 2000));
+    const downloadLinkResult = await Promise.race([downloadLinkPromise, timeoutPromise]);
+    const finalDownloadLink = downloadLinkResult || {
+      score: 0, triggered: false, status: 'pass',
+      detailCN: '下载链接: 超时跳过', detail: 'timeout'
+    };
+    tabState.ruleResults.downloadLink = finalDownloadLink;
 
     // 重新计算总分（包含所有规则 + 下载链接跨域检测）
     const newScore = Object.values(tabState.ruleResults)
@@ -748,12 +836,13 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
 
     // 分数达标 → 取消下载 + 高危响应
     if (newScore >= SCORE_THRESHOLD) {
-      // 取消下载
-      try {
-        await chrome.downloads.cancel(downloadItem.id);
-        console.log('[ServiceWorker] 已取消危险下载:', downloadItem.filename);
-      } catch (e) {
-        console.error('[ServiceWorker] 取消下载失败:', e);
+      if (!cancelled) {
+        try {
+          await chrome.downloads.cancel(downloadItem.id);
+          console.log('[ServiceWorker] 已取消危险下载:', downloadItem.filename);
+        } catch (e) {
+          console.error('[ServiceWorker] 取消下载失败:', e);
+        }
       }
 
       // 更新缓存（清洗瞬时事件数据，防止缓存污染）
@@ -834,7 +923,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             riskLevel: ts.riskLevel, isAnalyzed: ts.isAnalyzed,
             isWhitelisted: whitelisted,
             ruleResults: ts.ruleResults, correctUrl: ts.correctUrl,
-            officialName: ts.officialName
+            officialName: ts.officialName,
+            aiResult: ts.aiResult,
+            aiPending: ts.aiPending
           }
         });
       });
@@ -907,6 +998,45 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const url = message.payload?.url || '';
       isWhitelisted(url).then(result => {
         sendResponse({ success: true, isWhitelisted: result });
+      });
+      return true;
+    }
+
+    // ==================== AI 相关消息 ====================
+    case AI_MSG_TYPES.GET_AI_SETTINGS:
+    case 'GET_AI_SETTINGS': {
+      chrome.storage.local.get(AI_STORAGE_KEY).then(r => {
+        sendResponse({ success: true, settings: r[AI_STORAGE_KEY] || null });
+      });
+      return true;
+    }
+
+    case AI_MSG_TYPES.SAVE_AI_SETTINGS:
+    case 'SAVE_AI_SETTINGS': {
+      const settings = message.payload?.settings;
+      if (!settings) { sendResponse({ success: false, error: 'no settings' }); break; }
+      AiDetector.saveSettings(settings).then(ok => {
+        sendResponse({ success: ok });
+      });
+      return true;
+    }
+
+    case AI_MSG_TYPES.TEST_AI_CONNECTION:
+    case 'TEST_AI_CONNECTION': {
+      const testSettings = message.payload?.settings;
+      if (!testSettings) { sendResponse({ success: false, error: 'no settings' }); break; }
+      AiDetector.testConnection(testSettings).then(result => {
+        sendResponse(result);
+      });
+      return true;
+    }
+
+    case AI_MSG_TYPES.REQUEST_AI_RESULT:
+    case 'REQUEST_AI_RESULT': {
+      chrome.tabs.query({ active: true, currentWindow: true }).then(async (tabs) => {
+        if (tabs.length === 0) { sendResponse({ success: false }); return; }
+        const ts = await loadTabState(tabs[0].id);
+        sendResponse({ success: true, aiResult: ts.aiResult || null });
       });
       return true;
     }

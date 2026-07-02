@@ -1,0 +1,90 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Microsoft YaHei', sans-serif;
+  background: #f5f5f5; color: #333; font-size: 14px; line-height: 1.6;
+}
+a { color: #1976d2; text-decoration: none; }
+a:hover { color: #1565c0; text-decoration: underline; }
+a:visited { color: #6a1b9a; }
+.container { max-width: 680px; margin: 40px auto; padding: 0 20px; }
+h1 { font-size: 22px; margin-bottom: 24px; color: #1a1a1a; }
+
+.tabs { display: flex; gap: 4px; margin-bottom: 20px; border-bottom: 2px solid #e0e0e0; }
+.tab-btn {
+  padding: 10px 20px; border: none; background: none; font-size: 14px; cursor: pointer;
+  color: #666; border-bottom: 2px solid transparent; margin-bottom: -2px; transition: all .2s;
+}
+.tab-btn:hover { color: #333; }
+.tab-btn.active { color: #1976d2; border-bottom-color: #1976d2; font-weight: 600; }
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+.desc { color: #666; margin-bottom: 16px; font-size: 13px; }
+
+.whitelist-input-row { display: flex; gap: 8px; margin-bottom: 16px; }
+.whitelist-input-row input { flex: 1; padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; }
+.whitelist-input-row button {
+  padding: 8px 20px; background: #1976d2; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 14px;
+}
+.whitelist-input-row button:hover { background: #1565c0; }
+
+#wl-list { list-style: none; }
+#wl-list li {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 10px 12px; background: #fff; border-radius: 6px; margin-bottom: 6px;
+  border: 1px solid #eee;
+}
+#wl-list li .remove-btn {
+  padding: 4px 12px; background: #e53935; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;
+}
+#wl-list li .remove-btn:hover { background: #c62828; }
+#wl-empty { color: #999; text-align: center; padding: 20px; }
+
+.section { margin-bottom: 16px; }
+.section label { display: block; margin-bottom: 4px; font-weight: 500; color: #555; font-size: 13px; }
+.section input[type="text"], .section input[type="password"], .section select {
+  width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px;
+}
+.section select { background: #fff; }
+.password-row { display: flex; gap: 8px; }
+.password-row input { flex: 1; }
+.btn-small { padding: 4px 12px; background: #e0e0e0; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; }
+
+/* Toggle switch */
+.toggle-row { display: flex; justify-content: space-between; align-items: center; }
+.switch { position: relative; display: inline-block; width: 44px; height: 24px; }
+.switch input { opacity: 0; width: 0; height: 0; }
+.slider {
+  position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
+  background: #ccc; transition: .3s; border-radius: 24px;
+}
+.slider:before {
+  content: ''; position: absolute; height: 18px; width: 18px; left: 3px; bottom: 3px;
+  background: #fff; transition: .3s; border-radius: 50%;
+}
+.switch input:checked + .slider { background: #1976d2; }
+.switch input:checked + .slider:before { transform: translateX(20px); }
+
+.checkbox-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; cursor: pointer; }
+.checkbox-row.warn { color: #e65100; }
+.checkbox-row input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; }
+
+.privacy-notice {
+  margin-top: 8px; padding: 10px 12px; background: #fff3e0; border-radius: 6px;
+  font-size: 12px; color: #e65100; border: 1px solid #ffe0b2;
+}
+
+.btn-row { display: flex; gap: 10px; margin-top: 20px; }
+.btn-primary {
+  padding: 10px 24px; background: #1976d2; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 500;
+}
+.btn-primary:hover { background: #1565c0; }
+.btn-secondary {
+  padding: 10px 24px; background: #e0e0e0; color: #333; border: none; border-radius: 6px; cursor: pointer; font-size: 14px;
+}
+.btn-secondary:hover { background: #bdbdbd; }
+
+.status-msg {
+  margin-top: 12px; padding: 10px 12px; border-radius: 6px; font-size: 13px; display: none;
+}
+.status-msg.success { display: block; background: #e8f5e9; color: #2e7d32; border: 1px solid #c8e6c9; }
+.status-msg.error { display: block; background: #ffebee; color: #c62828; border: 1px solid #ffcdd2; }

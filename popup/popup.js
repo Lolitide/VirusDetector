@@ -47,6 +47,14 @@
     detailsSection: $('details-section'),
     refreshBtn: $('refresh-btn'),
     whitelistBtn: $('whitelist-btn'),
+    configBtn: $('config-btn'),
+    // AI 结果相关
+    aiResultSection: $('ai-result-section'),
+    aiConfidenceBadge: $('ai-confidence-badge'),
+    aiBrandRow: $('ai-brand-row'),
+    aiBrandValue: $('ai-brand-value'),
+    aiAdjustmentValue: $('ai-adjustment-value'),
+    aiReasoningValue: $('ai-reasoning-value'),
     // 刻度尺相关元素
     safeScoreIcon: $('safe-score-icon'),
     safeGaugeIndicator: $('safe-gauge-indicator'),
@@ -325,6 +333,49 @@
     els.detailsSection.style.display = 'none';
   }
 
+  // ==================== AI 分析结果展示 ====================
+
+  function showAiResult(data) {
+    const aiResult = data.aiResult;
+    if (!aiResult) { els.aiResultSection.style.display = 'none'; return; }
+
+    // 只当分数 > 60 才展示 AI 结果
+    if ((data.score || 0) <= 60) { els.aiResultSection.style.display = 'none'; return; }
+
+    // 展示 AI 结果卡片
+    els.aiResultSection.style.display = 'block';
+
+    // 置信度徽章
+    const conf = aiResult.confidence || 0;
+    const badge = els.aiConfidenceBadge;
+    if (aiResult.isPhishing === true) {
+      badge.textContent = '钓鱼 ' + conf + '%';
+      badge.className = 'ai-badge ai-badge-danger';
+    } else if (aiResult.isPhishing === false) {
+      badge.textContent = '安全 ' + conf + '%';
+      badge.className = 'ai-badge ai-badge-safe';
+    } else {
+      badge.textContent = conf + '%';
+      badge.className = 'ai-badge ai-badge-neutral';
+    }
+
+    // 冒充品牌
+    if (aiResult.impersonatingBrand) {
+      els.aiBrandRow.style.display = 'flex';
+      els.aiBrandValue.textContent = aiResult.impersonatingBrand;
+    } else {
+      els.aiBrandRow.style.display = 'none';
+    }
+
+    // 调整分数
+    const adj = aiResult.scoreAdjustment || 0;
+    els.aiAdjustmentValue.textContent = (adj >= 0 ? '+' : '') + adj + ' 分';
+    els.aiAdjustmentValue.style.color = adj > 0 ? '#F44336' : adj < 0 ? '#4CAF50' : 'inherit';
+
+    // 理由
+    els.aiReasoningValue.textContent = aiResult.reasoning || '无';
+  }
+
   // ==================== 数据获取 ====================
 
   async function fetchState() {
@@ -355,6 +406,15 @@
     }
     if (!data) { showError('无法获取页面分析结果'); return; }
 
+    // AI 分析中：展示等待状态，不显示安全/危险
+    if (data.aiPending) {
+      showLoading();
+      els.loading.innerHTML = '<div style="text-align:center;padding:20px;">' +
+        '<p style="font-size:14px;color:#b388ff;">AI 辅助分析中，请稍候...</p>' +
+        '</div>';
+      return;
+    }
+
     // 白名单优先显示（极简模式：仅绿色勾，无文字无详情）
     if (data.isWhitelisted) {
       showWhitelisted(data);
@@ -368,6 +428,7 @@
       showSafe(data);
     }
     updateDetails(data.ruleResults);
+    showAiResult(data);
     updateWhitelistButton(false);
   }
 
@@ -418,6 +479,13 @@
       console.error('[Popup] 白名单操作失败:', e);
     }
     els.whitelistBtn.disabled = false;
+  });
+
+  // 设置按钮
+  els.configBtn.addEventListener('click', () => {
+    chrome.runtime.openOptionsPage().catch(() => {
+      chrome.tabs.create({ url: 'config/config.html' }).catch(() => {});
+    });
   });
 
   // ==================== 初始化 ====================

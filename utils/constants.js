@@ -235,3 +235,46 @@ export const DOMAIN_AGE_BONUS_MIN_DAYS = 180;
 
 /** 域名年龄减分封顶天数：注册天数 ≥ 此值获得最大减分 */
 export const DOMAIN_AGE_BONUS_MAX_DAYS = 730;
+
+// ==================== AI 辅助检测 ====================
+export const AI_TRIGGER_MIN_SCORE = 40;
+export const AI_TRIGGER_MAX_SCORE = Infinity;
+export const AI_SCORE_BOOST_CAP = 40;
+export const AI_SCORE_REDUCE_CAP = -20;
+export const AI_REQUEST_TIMEOUT = 15000;
+export const AI_OPENAI_DEFAULT_MODEL = 'gpt-4o-mini';
+export const AI_OLLAMA_DEFAULT_MODEL = 'llama3.2-vision:11b';
+export const AI_OLLAMA_DEFAULT_URL = 'http://localhost:11434';
+
+export const AI_PROVIDER = {
+  OPENAI: 'openai',
+  OLLAMA: 'ollama',
+  DISABLED: 'disabled'
+};
+
+export const AI_PRIVACY = {
+  SEND_DOMAIN: 'sendDomain',
+  SEND_SCREENSHOT: 'sendScreenshot',
+  SEND_WHOIS: 'sendWhois',
+  SEND_ICP: 'sendIcp'
+};
+
+export const AI_PRIVACY_DEFAULTS = {
+  sendDomain: true,
+  sendScreenshot: false,
+  sendWhois: true,
+  sendIcp: true
+};
+
+export const AI_STORAGE_KEY = 'ai_settings';
+
+export const AI_MSG_TYPES = {
+  AI_ANALYSIS_RESULT: 'AI_ANALYSIS_RESULT',
+  AI_SETTINGS_CHANGED: 'AI_SETTINGS_CHANGED',
+  TEST_AI_CONNECTION: 'TEST_AI_CONNECTION',
+  REQUEST_AI_RESULT: 'REQUEST_AI_RESULT',
+  GET_AI_SETTINGS: 'GET_AI_SETTINGS',
+  SAVE_AI_SETTINGS: 'SAVE_AI_SETTINGS',
+  GET_AI_SETTINGS_RESPONSE: 'GET_AI_SETTINGS_RESPONSE',
+  TEST_AI_CONNECTION_RESPONSE: 'TEST_AI_CONNECTION_RESPONSE'
+};

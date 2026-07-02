@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Virus Detector 设置</title>
+  <link rel="stylesheet" href="config.css">
+</head>
+<body>
+  <div class="container">
+    <h1>Virus Detector 设置</h1>
+
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="whitelist">白名单管理</button>
+      <button class="tab-btn" data-tab="ai">AI 辅助检测</button>
+      <button class="tab-btn" data-tab="about">关于</button>
+    </div>
+
+    <!-- 白名单 -->
+    <div class="tab-content active" id="tab-whitelist">
+      <p class="desc">添加到白名单的域名将完全跳过检测。适用于你信任的网站。</p>
+      <div class="whitelist-input-row">
+        <input type="text" id="wl-input" placeholder="输入域名，如 example.com">
+        <button id="wl-add-btn">添加</button>
+      </div>
+      <ul id="wl-list"></ul>
+    </div>
+
+    <!-- AI 设置 -->
+    <div class="tab-content" id="tab-ai">
+      <p class="desc">配置 AI 辅助检测。当规则评分在 40-99 分之间时，调用 AI 做二次判断。</p>
+
+      <div class="section">
+        <label class="toggle-row">
+          <span>启用 AI 辅助检测</span>
+          <label class="switch">
+            <input type="checkbox" id="ai-enabled">
+            <span class="slider"></span>
+          </label>
+        </label>
+      </div>
+
+      <div id="ai-config-body" class="config-body">
+        <div class="section">
+          <label for="ai-provider">AI 服务商</label>
+          <select id="ai-provider">
+            <option value="openai">OpenAI 兼容 API</option>
+            <option value="ollama">本地 Ollama</option>
+          </select>
+        </div>
+
+        <div id="openai-settings" class="provider-settings">
+          <div class="section">
+            <label for="ai-endpoint">API 端点 URL</label>
+            <input type="text" id="ai-endpoint" placeholder="https://api.openai.com/v1">
+          </div>
+          <div class="section">
+            <label for="ai-key">API Key</label>
+            <div class="password-row">
+              <input type="password" id="ai-key" placeholder="sk-...">
+              <button id="ai-key-toggle" class="btn-small">显示</button>
+            </div>
+          </div>
+          <div class="section">
+            <label for="ai-model">模型名称</label>
+            <input type="text" id="ai-model" placeholder="gpt-4o-mini">
+          </div>
+        </div>
+
+        <div id="ollama-settings" class="provider-settings" style="display:none">
+          <div class="section">
+            <label for="ai-ollama-url">Ollama 地址</label>
+            <input type="text" id="ai-ollama-url" placeholder="http://localhost:11434">
+          </div>
+          <div class="section">
+            <label for="ai-ollama-model">模型名称</label>
+            <input type="text" id="ai-ollama-model" placeholder="llama3.2-vision:11b">
+          </div>
+        </div>
+
+        <div class="section">
+          <label>发送到 AI 的数据（隐私控制）</label>
+          <div class="privacy-list">
+            <label class="checkbox-row">
+              <input type="checkbox" id="privacy-domain" checked>
+              <span>发送域名</span>
+            </label>
+            <label class="checkbox-row warn">
+              <input type="checkbox" id="privacy-screenshot">
+              <span>发送页面截图 ⚠</span>
+            </label>
+            <label class="checkbox-row">
+              <input type="checkbox" id="privacy-whois" checked>
+              <span>发送 Whois 数据</span>
+            </label>
+            <label class="checkbox-row">
+              <input type="checkbox" id="privacy-icp" checked>
+              <span>发送 ICP 备案检测结果</span>
+            </label>
+          </div>
+          <div class="privacy-notice">⚠ 启用"发送页面截图"后，当前页面截图将被发送至所选的 AI 服务商。未启用时仅发送文本数据，精度较低。</div>
+        </div>
+
+        <div class="btn-row">
+          <button id="ai-test-btn" class="btn-secondary">测试连接</button>
+          <button id="ai-save-btn" class="btn-primary">保存设置</button>
+        </div>
+
+        <div id="ai-status-msg" class="status-msg"></div>
+      </div>
+    </div>
+
+    <!-- 关于 -->
+    <div class="tab-content" id="tab-about">
+      <p>银狐木马检测 - Virus Detector v2.3.0</p>
+      <p>检测银狐木马钓鱼网站，通过域名分析、ICP备案检查、下载检测、链接分析、代码工程化检测和 AI 辅助分析保护您的数字安全。</p>
+      <a href="https://github.com/Lolitide/VirusDetector" target="_blank">Github项目地址</a>
+    </div>
+  </div>
+
+  <script src="config.js"></script>
+</body>
+</html>
