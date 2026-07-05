@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "银狐木马检测 - Virus Detector",
-  "version": "2.4.0-alpha.1",
+  "version": "2.4.0",
+  "version_name": "2.4.0-alpha.1",
   "description": "检测银狐木马钓鱼网站，通过域名分析、ICP备案检查、下载检测、链接分析和代码工程化检测保护您的数字安全",
-
   "permissions": [
     "activeTab",
     "storage",
@@ -13,32 +13,40 @@
     "notifications",
     "webNavigation"
   ],
-
   "host_permissions": [
     "<all_urls>"
   ],
-
   "background": {
     "service_worker": "background/service-worker.js",
     "type": "module"
   },
-
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
-      "js": ["content/content-script.js"],
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content/content-script.js"
+      ],
       "run_at": "document_idle",
       "all_frames": false
     }
   ],
-
   "web_accessible_resources": [
     {
-      "resources": ["warning/warning.html", "warning/warning.js", "warning/warning.css", "warning/download-confirm.html", "warning/download-confirm.js", "warning/download-confirm.css"],
-      "matches": ["<all_urls>"]
+      "resources": [
+        "warning/warning.html",
+        "warning/warning.js",
+        "warning/warning.css",
+        "warning/download-confirm.html",
+        "warning/download-confirm.js",
+        "warning/download-confirm.css"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
     }
   ],
-
   "action": {
     "default_popup": "popup/popup.html",
     "default_icon": {
@@ -48,7 +56,6 @@
       "128": "icons/icon128.png"
     }
   },
-
   "icons": {
     "16": "icons/icon16.png",
     "32": "icons/icon32.png",
