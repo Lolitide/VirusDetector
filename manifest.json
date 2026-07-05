@@ -1,7 +1,8 @@
 {
   "manifest_version": 3,
   "name": "银狐木马检测 - Virus Detector",
-  "version": "2.4.0-alpha.1",
+  "version": "2.4.0",
+  "version_name": "2.4.0-alpha.1",
   "description": "检测银狐木马钓鱼网站，通过域名分析、ICP备案检查、下载检测、链接分析和代码工程化检测保护您的数字安全",
 
   "permissions": [
