@@ -569,7 +569,7 @@
    */
   function checkIcpGovLink() {
     try {
-      var links = document.querySelectorAll('a[href*="beian.miit.gov.cn"], a[href*="beian.gov.cn"], a[href*="miitbeian.gov.cn"]');
+      var links = document.querySelectorAll('a[href*="beian.miit.gov.cn"], a[href*="beian.gov.cn"], a[href*="miitbeian.gov.cn"], a[href*="beian.mps.gov.cn"]');
       return links.length > 0;
     } catch (e) {
       return false;
