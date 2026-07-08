@@ -320,7 +320,7 @@ export class IcpUtils {
    * 格式: 省份简称 + 公网安备 + 数字 + 号
    */
   static POLICE_BEIAN_REGEX = new RegExp(
-    `(${PROVINCE_PATTERN})公网安备\\d{10,}号`,
+    `(${PROVINCE_PATTERN})公网安备\\s*\\d{10,}\\s*号`,
     'g'
   );
 
@@ -368,6 +368,20 @@ export class IcpUtils {
         if (simpleMatches) {
           results.push(...simpleMatches.map(m => m + '号'));
           source = 'page_text_simple';
+        }
+      }
+    }
+
+    // 如果ICP正则都没匹配到，尝试公安备案号（如"沪公网安备 31010502000878号"）
+    if (results.length === 0) {
+      const domTexts = (domIcpStrings && domIcpStrings.length > 0) ? domIcpStrings : [];
+      const searchTexts = pageText ? [pageText, ...domTexts] : domTexts;
+      for (const str of searchTexts) {
+        const matches = str.match(this.POLICE_BEIAN_REGEX);
+        if (matches) {
+          results.push(...matches);
+          source = 'police_beian';
+          break;
         }
       }
     }
