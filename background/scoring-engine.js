@@ -560,8 +560,27 @@ export class ScoringEngine {
     // ═══════════════════════════════════════════════
     // Phase A — 主动检测（基于页面扫描）
     // ═══════════════════════════════════════════════
-    const archiveLinks = (linkMetrics && linkMetrics.archiveDownloadLinks)
+    const directArchiveLinks = (linkMetrics && linkMetrics.archiveDownloadLinks)
       ? linkMetrics.archiveDownloadLinks : [];
+
+    // 合并中转页/TXT发现的下载链接（转换为 archiveDownloadLinks 格式）
+    // 通过 fetch 追索才找到的下载链接，本身就是隐藏/跳转分发信号 → 标记为有下载意图
+    const relayLinks = (linkMetrics && linkMetrics.relayArchiveUrls)
+      ? linkMetrics.relayArchiveUrls : [];
+    const txtLinks = (linkMetrics && linkMetrics.txtDerivedArchiveUrls)
+      ? linkMetrics.txtDerivedArchiveUrls : [];
+    const derivedLinks = relayLinks.concat(txtLinks).map(function(u) {
+      // txt中发现的链接：攻击者用.txt做下载指针是明确恶意意图
+      // 中转页HTML中发现的链接：需要额外fetch才暴露，也是隐藏分发信号
+      var isFromTxt = u.source && u.source.indexOf('txt') === 0;
+      return { href: u.href, text: '', isCrossDomain: u.isCrossDomain, hasDownloadKW: true, ext: u.ext, source: u.source, _derived: true, _fromTxt: isFromTxt };
+    });
+
+    // 去重：derivedLinks 中已在 directArchiveLinks 出现的跳过
+    const directHrefSet = new Set(directArchiveLinks.map(function(l) { return l.href; }));
+    const newDerived = derivedLinks.filter(function(l) { return !directHrefSet.has(l.href); });
+
+    const archiveLinks = directArchiveLinks.concat(newDerived);
 
     if (archiveLinks.length > 0) {
       // 1. 筛选跨域链接（同域不计分，仅跟踪）
@@ -681,7 +700,16 @@ export class ScoringEngine {
     // Phase B — 被动检测（实际下载发生，L3 兜底）
     // ═══════════════════════════════════════════════
     if (downloadState && downloadState.hasDownloadedArchive) {
-      result.fileName = downloadState.archiveFileName || '未知文件';
+      // 文件名优先取 archiveFileName，回退到从 downloadUrl 提取
+      let dlName = downloadState.archiveFileName;
+      if (!dlName || dlName === '未知文件') {
+        try {
+          dlName = new URL(downloadState.downloadUrl || '').pathname.split('/').pop() || '未知文件';
+        } catch (e) { dlName = '未知文件'; }
+      }
+      // URL解码中文文件名
+      try { dlName = decodeURIComponent(dlName); } catch (e) {}
+      result.fileName = dlName || '未知文件';
       result.reactiveTriggered = true;
 
       let reactiveScore;
@@ -691,10 +719,14 @@ export class ScoringEngine {
         reactiveScore = resolveSetting('rule2_lowScore', SCORE_RULE_2_LOW);   // +10
       }
 
-      // Phase B 可以覆盖 Phase A（实际下载是更强信号）
-      if (reactiveScore > result.score) {
-        result.score = reactiveScore;
-        result.triggered = true;
+      // Phase B 叠加到 Phase A 之上（中转页追索 + 实际下载 = 双重信号）
+      result.score = result.score + reactiveScore;
+      result.triggered = true;
+      if (result.proactiveHits > 0) {
+        result.detail = result.detail + ' + 下载压缩包: ' + result.fileName +
+          ' (域名已有' + existingSuspicionScore + '分嫌疑) (+' + reactiveScore + ')';
+        result.detailCN = result.detailCN + ' + 从可疑站点下载压缩包 (' + result.fileName + ') +' + reactiveScore;
+      } else {
         result.detail = '下载压缩包: ' + result.fileName +
           ' (域名已有' + existingSuspicionScore + '分嫌疑)';
         result.detailCN = '下载检测: 从可疑站点下载压缩包 (' + result.fileName + ')';
@@ -908,6 +940,16 @@ export class ScoringEngine {
           const txtScore = Math.min(20, crossDomainTxtUrls.length * 8);
           partCScore += txtScore;
           partCReasons.push('.txt文件中发现' + crossDomainTxtUrls.length + '个隐藏压缩包链接');
+        }
+      }
+
+      // C-c：中转页源码中发现的跨域压缩包链接（fetch跳转页面，置信度最高，每链接 +10）
+      if (linkMetrics.relayArchiveUrls && linkMetrics.relayArchiveUrls.length > 0) {
+        const crossDomainRelayUrls = linkMetrics.relayArchiveUrls.filter(function(u) { return u.isCrossDomain; });
+        if (crossDomainRelayUrls.length > 0) {
+          const relayScore = Math.min(30, crossDomainRelayUrls.length * 10);
+          partCScore += relayScore;
+          partCReasons.push('中转页源码中发现' + crossDomainRelayUrls.length + '个隐藏压缩包链接');
         }
       }
     }

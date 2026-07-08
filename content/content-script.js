@@ -39,6 +39,39 @@
   // ==================== 规则四：链接分析数据采集 ====================
 
   /**
+   * 向 SW 发送消息（含重试），解决 SW 休眠导致 "Receiving end does not exist" 的问题。
+   * SW 在 ~30s 无活动后被浏览器终止；第一次 sendMessage 会唤醒 SW 但回调可能丢失。
+   * 最多重试 3 次，间隔 300ms/600ms。
+   */
+  async function sendMessageWithRetry(message, maxRetries) {
+    maxRetries = maxRetries || 3;
+    var lastError = null;
+    for (var attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        var result = await new Promise(function(resolve, reject) {
+          chrome.runtime.sendMessage(message, function(response) {
+            if (chrome.runtime.lastError) {
+              reject(new Error(chrome.runtime.lastError.message));
+            } else if (response && response.success) {
+              resolve(response.data);
+            } else {
+              reject(new Error((response && response.error) || 'SW fetch failed'));
+            }
+          });
+        });
+        return result;
+      } catch (e) {
+        lastError = e;
+        if (attempt < maxRetries - 1) {
+          // 等待 SW 唤醒 + 初始化完成
+          await new Promise(function(r) { setTimeout(r, 300 * (attempt + 1)); });
+        }
+      }
+    }
+    throw lastError;
+  }
+
+  /**
    * 异步采集链接分析指标
    * - 同页链接（完全一致URL）
    * - 死链（仅包括指向不存在子页面的链接）
@@ -61,9 +94,9 @@
     // 用于规则四A-③：跟踪链接被多少不同元素指向
     var linkElementMap = new Map();  // href (normalized) → Set of element signatures
 
-    var DOWNLOAD_KW = ['下载','download','下載','立即下载','免费下载','高速下载',
+    var DOWNLOAD_KW = ['下载','download','下載','ダウンロード','立即下载','免费下载','高速下载',
       '安全下载','点击下载','直接下载','本地下载','官方下载','download now',
-      'free download','立即安装','一键安装','安装包','setup','install','get started'];
+      'free download','Download Free','立即安装','一键安装','安装包','setup','install','get started'];
     var FILE_EXTS = ['.exe','.msi','.dmg','.apk','.zip','.rar','.7z',
       '.tar','.gz','.tgz','.bz2','.xz','.iso','.cab','.arj','.bat','.cmd',
       '.ps1','.vbs','.scr','.jar','.bin','.run','.sh','.pkg'];
@@ -213,9 +246,9 @@
     var archiveDownloadLinks = [];
     var archiveSeen = new Set();
     // 下载关键词（复用于判断链接意图）
-    var DL_KW = ['下载','download','下載','立即下载','免费下载','高速下载',
+    var DL_KW = ['下载','download','下載','ダウンロード','立即下载','免费下载','高速下载',
       '安全下载','点击下载','直接下载','本地下载','官方下载','download now',
-      'free download','立即安装','一键安装','安装包','setup','install','get started'];
+      'free download','Download Free','立即安装','一键安装','安装包','setup','install','get started'];
     var ARCHIVE_EXTS_DEDICATED = ['.zip','.rar','.7z','.tar','.gz','.tar.gz','.tgz',
       '.bz2','.xz','.z','.iso','.cab','.arj','.lzh','.tar.bz2','.tar.xz','.zst'];
 
@@ -267,7 +300,8 @@
 
     // ==================== 页面文本中扫描隐藏压缩包链接（多级跳转检测） ====================
     // 恶意跳转页面常在正文中以纯文本形式写下载链接（非 <a> 标签）
-    var TEXT_ARCHIVE_PATTERN = /https?:\/\/[^\s<>"'{}[\]|\\^`]+\.(zip|rar|7z|tar|gz|tgz|bz2|xz|iso|cab|arj|lzh|zst)(\?[^\s<>"'{}[\]|\\^`]*)?/gi;
+    // 文件名部分用 [^\s"'<>] 允许中文/Unicode，前瞻(?=)防止路径中间误匹配
+    var TEXT_ARCHIVE_PATTERN = /(?:https?:\/\/[^\s"'<>]+|[^\s"'<>]*\/[^\s"'<>]*[^\s"'<>])\.(zip|rar|7z|tar|gz|tgz|bz2|xz|iso|cab|arj|lzh|zst)(?=\?|[\s"'<>]|$)/gi;
     var pageTextForScan = (document.body ? document.body.innerText : '') || '';
     var textArchiveUrls = [];
     var textArchiveSeen = new Set();
@@ -276,7 +310,8 @@
     while ((tmatch = TEXT_ARCHIVE_PATTERN.exec(pageTextForScan)) !== null) {
       var rawUrl = tmatch[0];
       try {
-        var tparsed = new URL(rawUrl);
+        // 相对路径用当前页面 URL 解析
+        var tparsed = new URL(rawUrl, window.location.href);
         var tnormalized = tparsed.href.replace(/#.*$/, '');
         if (!textArchiveSeen.has(tnormalized)) {
           textArchiveSeen.add(tnormalized);
@@ -290,8 +325,93 @@
       } catch (e) { /* 无效 URL，跳过 */ }
     }
 
-    // ==================== .txt 文件内容解析（多级跳转检测） ====================
-    // 页面 <a> 标签可能指向 .txt 文件，其内容包含真实的下载链接
+    // ==================== 中转页检测：fetch跳转页面源码查找压缩包链接 ====================
+    // 1. 收集中转页候选：<a> 指向其他HTML页面的链接（非直接文件下载）
+    var relayPageCandidates = [];
+    var relayCandidateSeen = new Set();
+    var NON_RELAY_EXTS = ['.zip','.rar','.7z','.tar','.gz','.tgz','.bz2','.xz','.iso','.cab','.arj','.lzh','.zst',
+      '.txt','.exe','.msi','.dmg','.apk','.jpg','.jpeg','.png','.gif','.svg','.css','.js','.pdf','.ico','.webp'];
+
+    function getRelayCandidatePriority(el, href) {
+      var hrefLower = href.toLowerCase();
+      var linkText = (el.textContent || '').toLowerCase();
+      var parentText = (el.parentElement ? el.parentElement.textContent : '').toLowerCase();
+      var ariaLabel = (el.getAttribute('aria-label') || '').toLowerCase();
+      var title = (el.getAttribute('title') || '').toLowerCase();
+      var className = (el.className || '').toLowerCase();
+      var parentClass = (el.parentElement ? el.parentElement.className : '').toLowerCase();
+      var combined = [linkText, parentText, ariaLabel, title, className, parentClass].join(' ');
+
+      var score = 0;
+      if (DL_KW.some(function(kw) { return combined.includes(kw); })) score += 3;
+      if (hrefLower.includes('/download') || hrefLower.includes('download=')) score += 3;
+      if (hrefLower.includes('/install') || hrefLower.includes('/setup') || hrefLower.includes('/get')) score += 2;
+      if (hrefLower.includes('.zip') || hrefLower.includes('.rar') || hrefLower.includes('.7z') || hrefLower.includes('.exe') || hrefLower.includes('.msi') || hrefLower.includes('.apk')) score += 2;
+      if (className.indexOf('download') !== -1 || parentClass.indexOf('download') !== -1) score += 3;
+      if (className.indexOf('btn-dl') !== -1 || parentClass.indexOf('btn-dl') !== -1) score += 3;
+      if (className.indexOf('down-btn') !== -1 || parentClass.indexOf('down-btn') !== -1) score += 3;
+      if (className.indexOf('down_url') !== -1 || parentClass.indexOf('down_url') !== -1) score += 3;
+      if (hrefLower.match(/\/(faq|help|support|docs?|about|contact|privacy|policy|terms)(\/|$)/)) score -= 4;
+      var simpleText = linkText.trim();
+      if (/^(learn more|read more|more|details?|view more|faq|help|support)$/.test(simpleText)) score -= 3;
+      if (hrefLower.match(/\/(blog|news|article|press)(\/|$)/)) score -= 3;
+      if (hrefLower.includes('smart-routing') || hrefLower.includes('/config')) score -= 4;
+      return score;
+    }
+
+    function selectRelayFetchCandidates(candidates) {
+      if (!candidates || candidates.length === 0) return [];
+      var selected = [candidates[0]];
+      if (candidates.length === 1) return selected;
+      if (candidates[0].score >= 5 && candidates[1].score <= 1) return selected;
+      if (candidates[1].score >= 2) selected.push(candidates[1]);
+      if (candidates.length > 2 && candidates[2].score >= 3) selected.push(candidates[2]);
+      return selected;
+    }
+
+    // 只收集有下载意图的中转页（链接文字含下载关键词），不 fetch 普通导航链接
+    for (var k2 = 0; k2 < links.length; k2++) {
+      var rlink = links[k2];
+      var rhref = (rlink.getAttribute('href') || '').trim();
+      if (!rhref || /^javascript\s*:/i.test(rhref) || /^#/.test(rhref)) continue;
+
+      var rlower = rhref.toLowerCase();
+      // 跳过直接文件链接
+      var isNonHtml = false;
+      for (var n2 = 0; n2 < NON_RELAY_EXTS.length; n2++) {
+        var ext2 = NON_RELAY_EXTS[n2];
+        if (rlower.endsWith(ext2) || rlower.indexOf(ext2 + '?') !== -1) {
+          isNonHtml = true; break;
+        }
+      }
+      if (isNonHtml) continue;
+
+      try {
+        var rresolved = new URL(rhref, window.location.href);
+        var rnormalized = rresolved.href.replace(/#.*$/, '');
+        if (rnormalized === currentUrl) continue;
+        if (relayCandidateSeen.has(rnormalized)) continue;
+        relayCandidateSeen.add(rnormalized);
+
+        var priority = getRelayCandidatePriority(rlink, rnormalized);
+        if (priority < 1) continue;
+
+        relayPageCandidates.push({
+          href: rnormalized.substring(0, 300),
+          isCrossDomain: rresolved.hostname !== currentHost,
+          score: priority
+        });
+      } catch (e) {}
+    }
+
+    // 优先按得分排序，再优先跨域
+    relayPageCandidates.sort(function(a, b) {
+      if (b.score !== a.score) return b.score - a.score;
+      return (b.isCrossDomain ? 1 : 0) - (a.isCrossDomain ? 1 : 0);
+    });
+    var relayToFetch = selectRelayFetchCandidates(relayPageCandidates);
+
+    // 2. 收集当前页的 .txt 链接
     var txtLinks = [];
     for (var j2 = 0; j2 < links.length; j2++) {
       var tlink = links[j2];
@@ -306,7 +426,7 @@
       }
     }
 
-    // 去重后最多尝试 3 个 .txt 文件
+    // 去重 .txt 链接（最多3个）
     var uniqueTxtLinks = [];
     var txtSeen = new Set();
     for (var u = 0; u < txtLinks.length; u++) {
@@ -315,30 +435,106 @@
         uniqueTxtLinks.push(txtLinks[u]);
       }
     }
-    var txtToFetch = uniqueTxtLinks.slice(0, 3);
-    var txtDerivedArchiveUrls = [];
 
-    for (var t2 = 0; t2 < txtToFetch.length; t2++) {
-      try {
-        var resp = await fetchWithTimeout(txtToFetch[t2], {}, 3000);
-        if (resp.ok) {
-          var txtContent = await resp.text();
-          var ZIP_PATTERN = /https?:\/\/[^\s<>"'{}[\]|\\^`]+\.(zip|rar|7z|tar|gz|tgz|bz2|xz|iso|cab)(\?[^\s<>"'{}[\]|\\^`]*)?/gi;
-          var zmatch;
-          while ((zmatch = ZIP_PATTERN.exec(txtContent)) !== null) {
-            try {
-              var zurl = new URL(zmatch[0]);
-              txtDerivedArchiveUrls.push({
-                href: zurl.href.substring(0, 200),
-                isCrossDomain: zurl.hostname !== currentHost,
-                ext: '.' + zmatch[1].toLowerCase(),
-                source: 'txt-derived'
-              });
-            } catch (e) {}
+    // ==================== 扫描 <script> 内联文本中的隐藏URL（盲区覆盖） ====================
+    // body.innerText 不包含 <script> 内容，中转页常把下载地址写在 JS 变量里（如 REMOTE_SETUP_URL）
+    var inlineScripts = document.querySelectorAll('script:not([src])');
+    var SCRIPT_TXT_RE_LOCAL = /(?:https?:\/\/[^\s"'<>]+|[^\s"'<>]*\/[^\s"'<>]*[^\s"'<>])\.txt(?=\?|[\s"'<>]|$)/gi;
+
+    for (var si = 0; si < inlineScripts.length && si < 20; si++) {
+      var scriptText = inlineScripts[si].textContent || '';
+      if (scriptText.length < 12) continue;
+
+      // 搜索压缩包链接（复用 TEXT_ARCHIVE_PATTERN）
+      TEXT_ARCHIVE_PATTERN.lastIndex = 0;
+      var smatch;
+      while ((smatch = TEXT_ARCHIVE_PATTERN.exec(scriptText)) !== null) {
+        try {
+          var sparsed = new URL(smatch[0], window.location.href);
+          var snorm = sparsed.href.replace(/#.*$/, '');
+          if (!textArchiveSeen.has(snorm)) {
+            textArchiveSeen.add(snorm);
+            textArchiveUrls.push({
+              href: snorm.substring(0, 200),
+              isCrossDomain: sparsed.hostname !== currentHost,
+              ext: '.' + smatch[1].toLowerCase(),
+              source: 'script'
+            });
           }
-        }
-      } catch (e) { /* CORS 阻止或网络错误，跳过 */ }
+        } catch (e) {}
+      }
+
+      // 搜索 .txt 链接（追加到 uniqueTxtLinks 供入口循环fetch）
+      SCRIPT_TXT_RE_LOCAL.lastIndex = 0;
+      var stmatch;
+      while ((stmatch = SCRIPT_TXT_RE_LOCAL.exec(scriptText)) !== null) {
+        try {
+          var stparsed = new URL(stmatch[0], window.location.href);
+          var stnorm = stparsed.href.replace(/#.*$/, '');
+          if (!txtSeen.has(stnorm)) {
+            txtSeen.add(stnorm);
+            uniqueTxtLinks.push(stnorm);
+          }
+        } catch (e) {}
+      }
+
+      console.log('[VirusDetector] script扫描: 标签#' + si + ' (' + scriptText.length + 'B), 累计scriptArchive=' +
+        textArchiveUrls.filter(function(u) { return u.source === 'script'; }).length +
+        ', scriptTxt=' + (uniqueTxtLinks.length - Math.min(txtLinks.length, 3)));
     }
+
+    // 3. 委托 Service Worker 进行跨域 fetch（绕过 content-script CORS 限制）
+    // SW 拥有 host_permissions，可 fetch 任意域名；content-script 受页面同源策略约束
+    var relayArchiveUrls = [];
+    var txtDerivedArchiveUrls = [];
+    var relayFailCount = 0;
+
+    var relayUrlsToSend = [];
+    for (var p2 = 0; p2 < relayToFetch.length; p2++) {
+      relayUrlsToSend.push(relayToFetch[p2].href);
+    }
+    var txtUrlsToSend = uniqueTxtLinks.slice(0, 3);
+
+    var txtEntryCount = txtUrlsToSend.length;
+    console.log('[VirusDetector] 中转页检测委托SW: 下载按钮' + relayUrlsToSend.length + '个, .txt入口' + txtEntryCount + '个');
+    if (relayUrlsToSend.length > 0) {
+      console.log('[VirusDetector] SW委托URLs:', relayUrlsToSend.map(function(u, i) {
+        var info = relayToFetch[i];
+        return (i+1) + '.' + (info && !info.isCrossDomain ? '[同域]' : '[跨域]') + ' ' + u.substring(0, 70);
+      }));
+    }
+
+    // 无候选URL时跳过SW通信，避免SW休眠导致的"Receiving end does not exist"错误
+    if (relayUrlsToSend.length > 0 || txtUrlsToSend.length > 0) {
+      try {
+        var swResult = await sendMessageWithRetry({
+          type: 'FETCH_RELAY_URLS',
+          payload: { relayUrls: relayUrlsToSend, txtUrls: txtUrlsToSend, currentHost: currentHost }
+        });
+        relayArchiveUrls = swResult.relayArchiveUrls || [];
+        txtDerivedArchiveUrls = swResult.txtDerivedArchiveUrls || [];
+        relayFailCount = swResult.failCount || 0;
+        // 输出 SW 返回的诊断信息，方便排查中转页提取失败原因
+        if (swResult.diagnostics && swResult.diagnostics.length > 0) {
+          console.log('[VirusDetector] SW诊断:', swResult.diagnostics.map(function(d) {
+            var parts = ['url=' + d.url, 'len=' + (d.contentLen || '?'), 'archive=' + (d.archiveFound || 0), 'txt=' + (d.txtFound || 0)];
+            if (d.scriptTxtFound !== undefined) parts.push('scriptTxt=' + d.scriptTxtFound);
+            if (d.hasDownloadIntent !== undefined) parts.push('downloadIntent=' + d.hasDownloadIntent);
+            if (d.status === 'fetch_failed') parts.push('FETCH_FAILED');
+            return parts.join(' ');
+          }));
+        }
+      } catch (e) {
+        console.warn('[VirusDetector] SW relay fetch 失败（SW休眠或不可用）:', e.message);
+      }
+    } else {
+      console.log('[VirusDetector] 中转页检测: 无候选URL，跳过SW通信');
+    }
+
+    var totalDiscovered = relayArchiveUrls.length + txtDerivedArchiveUrls.length;
+    console.log('[VirusDetector] 中转页检测完成: 中转页直接=' + relayArchiveUrls.length +
+      '个, txt追索=' + txtDerivedArchiveUrls.length + '个, 合计发现=' + totalDiscovered +
+      '个下载链接, 失败(CORS/超时)=' + relayFailCount + '个');
 
     return {
       totalLinks: links.length,
@@ -355,7 +551,8 @@
       hasDuplicateDownloadLink: duplicateLinks.some(function(d) { return d.isDownloadLink; }),
       // 规则四 Part C 数据源：多级跳转检测
       textArchiveUrls: textArchiveUrls,
-      txtDerivedArchiveUrls: txtDerivedArchiveUrls
+      txtDerivedArchiveUrls: txtDerivedArchiveUrls,
+      relayArchiveUrls: relayArchiveUrls
     };
   }
 
@@ -795,6 +992,7 @@
 
   // 首次扫描结果缓存，用于二次扫描去重
   var _firstScanData = null;
+  var _cachedLinkMetrics = null; // 核心优化：SW中转页fetch结果缓存，避免重复网络请求
 
   async function sendAnalysisResult(options) {
     options = options || {};
@@ -802,12 +1000,19 @@
     var bodyText = safeCollect(function() { return (document.body ? document.body.innerText : '') || ''; }, '');
     var pageMetrics = safeCollect(function() { return collectPageMetrics(bodyText); }, null);
     var icpStrings = safeCollect(findIcpStrings, []);
-    // 链接分析含异步HEAD请求检测死链，需await
+
+    // 链接分析含 SW 中转页 fetch（最耗时），仅首次执行，后续复用缓存
     var linkMetrics = null;
-    try {
-      linkMetrics = await collectLinkMetrics({ checkDeadLinks: options.checkDeadLinks !== false });
-    } catch (e) {
-      console.error('[VirusDetector] 链接分析采集失败:', e);
+    if (_cachedLinkMetrics) {
+      // 后续扫描直接复用——跳过全部 fetch 和 SW 通信，零网络开销
+      linkMetrics = _cachedLinkMetrics;
+    } else {
+      try {
+        linkMetrics = await collectLinkMetrics({ checkDeadLinks: options.checkDeadLinks !== false });
+        _cachedLinkMetrics = linkMetrics; // 首次计算结果永久缓存
+      } catch (e) {
+        console.error('[VirusDetector] 链接分析采集失败:', e);
+      }
     }
 
     var hasIcpGovLink = checkIcpGovLink();
@@ -926,10 +1131,12 @@
     scheduleAnalysis(3500, { checkDeadLinks: false });
   }
 
+  // 统一入口：只选一种方式触发，避免重复扫描
   if (document.readyState === 'complete' || document.readyState === 'interactive') {
     init();
   } else {
-    window.addEventListener('load', () => scheduleAnalysis(600, { checkDeadLinks: _cachedCheckDeadLinks }));
+    // readyState 为 loading 时，等 DOM ready 后启动（只加一次 listener）
+    document.addEventListener('DOMContentLoaded', function() { init(); }, { once: true });
   }
 
 })();

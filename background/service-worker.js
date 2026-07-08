@@ -512,7 +512,8 @@ function injectBlockerFunc(archiveUrls, detectNonArchive) {
   // 下载相关中英文关键词（用于匹配按钮文本和下载意图）
   var DOWNLOAD_KEYWORDS = [
     '下载', 'download', '下載', 'ダウンロード',
-    '立即安装', '立即下载', '免费下载', '高速下载', '安全下载',
+    '立即安装', '一键安装', '安装包',
+    '立即下载', '免费下载', '高速下载', '安全下载',
     '点击下载', '直接下载', '本地下载', '官方下载',
     'Download Now', 'Free Download', 'Download Free',
     'install', 'setup', 'get started'
@@ -1058,6 +1059,316 @@ chrome.webNavigation.onCompleted.addListener(async (details) => {
     console.error('[ServiceWorker] analyzePage error:', e));
 });
 
+// ==================== 中转页/TXT 追索（SW 端，绕过 CORS） ====================
+// content-script 运行在页面 origin，fetch 跨域受 CORS 限制
+// SW 拥有 host_permissions，可跨域 fetch 而不触发 CORS 拦截
+
+// 泛解析：同时匹配 https:// 绝对URL 和 ./ ../ / 相对路径
+// 文件名部分用 [^\s"'<>] 允许中文/Unicode，前瞻(?=)防止路径中间误匹配
+const RELAY_ARCHIVE_RE = /(?:https?:\/\/[^\s"'<>]+|[^\s"'<>]*\/[^\s"'<>]*[^\s"'<>])\.(zip|rar|7z|tar|gz|tgz|bz2|xz|iso|cab|arj|lzh|zst)(?=\?|[\s"'<>]|$)/gi;
+const RELAY_TXT_RE = /(?:https?:\/\/[^\s"'<>]+?|[^\s"'<>]+?\/[^\s"'<>]*?)\.txt(?=\?|[\s"'<>]|$)/gi;
+const RELAY_MAX_DEPTH = 3;
+const RELAY_FETCH_TIMEOUT = 4000;
+const RELAY_CACHE_TTL = 15000; // 15s 内相同 URL 集合直接复用（双次扫描去重）
+
+/** @type {{key: string, result: Object, ts: number}|null} */
+let _relayCache = null;
+
+// ==================== 并行 fetch 工具（减少串行等待） ====================
+/**
+ * 带超时的 fetch
+ */
+async function fetchWithTimeoutSW(url, timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * 从 fetch 响应文本中提取 URL，对结果去重
+ * @param {string} content - 响应文本
+ * @param {string} sourceUrl - 用于解析相对路径的基准 URL
+ * @param {RegExp} regex - 提取正则
+ * @param {Set} seen - 已见 URL 集合
+ * @returns {string[]} 新发现的归一化 URL
+ */
+function extractUrlsFromText(content, sourceUrl, regex, seen) {
+  regex.lastIndex = 0;
+  const found = [];
+  let m;
+  while ((m = regex.exec(content)) !== null) {
+    try {
+      const parsed = new URL(m[0], sourceUrl);
+      const norm = parsed.href.replace(/#.*$/, '');
+      if (!seen.has(norm)) {
+        seen.add(norm);
+        found.push(norm);
+      }
+    } catch (e) { /* skip invalid */ }
+  }
+  return found;
+}
+
+// ══════════════════════════════════════════════════════
+// 中转页下载意图检测（与 disableExistingDownloadButtons 关键字保持一致）
+// ══════════════════════════════════════════════════════
+const RELAY_PAGE_DOWNLOAD_KW = [
+  '下载', 'download', '下載',
+  '立即安装', '一键安装', '安装包',
+  '立即下载', '免费下载', '高速下载', '安全下载',
+  '点击下载', '直接下载', '本地下载', '官方下载',
+  'Download Now', 'Free Download', 'Download Free',
+  'install', 'setup', 'get started'
+];
+
+/**
+ * 判断抓取到的 HTML 页面是否有下载意图
+ * 双重检测：纯文本关键词 + JS 下载中继模式
+ * @param {string} html - 页面 HTML 内容
+ * @returns {boolean}
+ */
+function pageHasDownloadIntent(html) {
+  // 第一层：纯文本关键词检测
+  const cleaned = html
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&\w+;/g, ' ')
+    .toLowerCase();
+  const textMatch = RELAY_PAGE_DOWNLOAD_KW.some(function(kw) {
+    return cleaned.indexOf(kw.toLowerCase()) !== -1;
+  });
+  if (textMatch) return true;
+
+  // 第二层：JS 下载中继模式检测（检查 <script> 块内容）
+  // 纯 JS 驱动的下载中转页，如：fetch .txt → triggerDownload
+  const scriptPatterns = [
+    /triggerDownload\s*\(/i,
+    /fetchRemoteSetupUrl/i,
+    /REMOTE_SETUP_URL/i,
+    /downloadUrl\s*=/i,
+    /\.click\s*\(\s*\)\s*;?\s*$/mi,  // a.click() 自动下载模式
+    /createElement\s*\(\s*["']a["']\s*\)[\s\S]{0,80}\.click\s*\(/i
+  ];
+  const scriptBlocks = html.match(/<script[\s\S]*?<\/script>/gi) || [];
+  for (var si = 0; si < scriptBlocks.length; si++) {
+    for (var pi = 0; pi < scriptPatterns.length; pi++) {
+      if (scriptPatterns[pi].test(scriptBlocks[si])) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * 从 <script> 块中专门提取 .txt URL（兜底 REGEX 在全 HTML 上可能漏掉的情况）
+ * 针对 JS 变量赋值/字符串字面量中的 URL
+ * @param {string} html - 页面 HTML
+ * @param {string} sourceUrl - 基准 URL
+ * @param {Set} seen - 去重集合
+ * @returns {string[]} 新发现的 .txt URL
+ */
+function extractScriptTxtUrls(html, sourceUrl, seen) {
+  const scriptBlocks = html.match(/<script[\s\S]*?<\/script>/gi) || [];
+  const found = [];
+  // 简单精确的正则：匹配 JS 字符串中的 http(s)://...txt
+  const SCRIPT_URL_RE = /https?:\/\/[^\s"'<>)\]]+\.txt/gi;
+  for (var si = 0; si < scriptBlocks.length; si++) {
+    var sm;
+    while ((sm = SCRIPT_URL_RE.exec(scriptBlocks[si])) !== null) {
+      try {
+        var raw = sm[0];
+        // 清理末尾可能粘上的 JS 语法字符
+        raw = raw.replace(/[;,)\]}]+$/, '');
+        var parsed = new URL(raw, sourceUrl);
+        var norm = parsed.href.replace(/#.*$/, '');
+        if (!seen.has(norm)) {
+          seen.add(norm);
+          found.push(norm);
+        }
+      } catch (e) { /* skip */ }
+    }
+  }
+  return found;
+}
+
+/**
+ * 处理来自 content-script 的中转页/TXT 追索委托
+ * 并行 fetch 所有页面，大幅减少总耗时
+ * @param {{relayUrls: string[], txtUrls: string[], currentHost: string}} payload
+ * @returns {Promise<{relayArchiveUrls: Object[], txtDerivedArchiveUrls: Object[], failCount: number}>}
+ */
+async function handleRelayFetch(payload) {
+  const { relayUrls = [], txtUrls = [], currentHost = '' } = payload;
+  const startTime = Date.now();
+
+  // ---- 缓存检查：15s 内相同 URL 集合直接复用，避免双次扫描重复 fetch ----
+  const cacheKey = JSON.stringify({ r: relayUrls.slice().sort(), t: txtUrls.slice().sort(), h: currentHost });
+  if (_relayCache && _relayCache.key === cacheKey && (Date.now() - _relayCache.ts) < RELAY_CACHE_TTL) {
+    console.log('[SW-relay] 命中缓存，跳过 ' + (relayUrls.length + txtUrls.length) + ' 次 fetch (' +
+      (Date.now() - _relayCache.ts) + 'ms前)');
+    return _relayCache.result;
+  }
+
+  const relayArchiveUrls = [];
+  const txtDerivedArchiveUrls = [];
+  const fetchedUrls = new Set();
+  const levelResults = []; // 每层的新发现 {urls, sourceType, depth}
+  let totalFailCount = 0; // 累计各层 fetch 失败数
+  const diagnostics = []; // 每个 URL 的处理诊断信息
+
+  console.log('[SW-relay] 并行开始: relay=' + relayUrls.length + '个, txt=' + Math.min(txtUrls.length, 3) + '个');
+
+  // ---- 核心：按层并行 fetch ----
+  async function processLevel(urls, depth, sourceType) {
+    if (urls.length === 0) return;
+
+    const beforeCount = relayArchiveUrls.length + txtDerivedArchiveUrls.length;
+    const newUrls = urls.filter(u => !fetchedUrls.has(u));
+    newUrls.forEach(u => fetchedUrls.add(u));
+
+    // 并行 fetch 本层所有 URL
+    const results = await Promise.allSettled(
+      newUrls.map(async (url) => {
+        const urlShort = url.substring(0, 80);
+        try {
+          const resp = await fetchWithTimeoutSW(url, RELAY_FETCH_TIMEOUT);
+          if (!resp.ok) {
+            console.log('[SW-relay] HTTP' + resp.status + ' d=' + depth + ' url=' + urlShort);
+            return { ok: false, url };
+          }
+          const content = await resp.text();
+          return { ok: true, url, content };
+        } catch (e) {
+          console.log('[SW-relay] 失败 d=' + depth + ' url=' + urlShort + ' err=' + (e && e.message ? e.message : e));
+          return { ok: false, url };
+        }
+      })
+    );
+
+    const archiveMatchSeen = new Set(); // 本层内去重
+    const nextLevelUrls = [];
+    let failCount = 0;
+
+    for (const r of results) {
+      if (r.status === 'rejected' || !r.value.ok) {
+        failCount++;
+        diagnostics.push({ url: (r.value && r.value.url) || 'unknown', status: 'fetch_failed', depth, sourceType });
+        continue;
+      }
+      const { url, content } = r.value;
+      const urlShort = url.substring(0, 80);
+      const diag = { url: urlShort, depth, sourceType, contentLen: content ? content.length : 0 };
+
+      // HTML 中转页：先检测页面本身是否有下载意图，无意图则跳过（避免文档页/博客等被误判）
+      if (sourceType === 'html') {
+        const hasIntent = pageHasDownloadIntent(content);
+        diag.hasDownloadIntent = hasIntent;
+        if (!hasIntent) {
+          console.log('[SW-relay] 跳过非下载页 d=' + depth + ' url=' + urlShort);
+          diagnostics.push(diag);
+          continue;
+        }
+      }
+
+      // 提取压缩包链接
+      const archives = extractUrlsFromText(content, url, RELAY_ARCHIVE_RE, archiveMatchSeen);
+      diag.archiveFound = archives.length;
+      for (const archiveUrl of archives) {
+        try {
+          const parsed = new URL(archiveUrl);
+          const entry = {
+            href: archiveUrl.substring(0, 200),
+            isCrossDomain: parsed.hostname !== currentHost,
+            ext: archiveUrl.match(/\.(zip|rar|7z|tar|gz|tgz|bz2|xz|iso|cab|arj|lzh|zst)(\?|$)/i),
+            source: sourceType + '-d' + depth
+          };
+          entry.ext = entry.ext ? '.' + entry.ext[1].toLowerCase() : '.zip';
+          if (sourceType === 'txt') {
+            txtDerivedArchiveUrls.push(entry);
+          } else {
+            relayArchiveUrls.push(entry);
+          }
+        } catch (e) { /* skip */ }
+      }
+
+      // 提取 .txt 链接（仅当还有深度时才递归）
+      // 注意：不能用 fetchedUrls 做去重——那会导致 .txt URL 被标记为"已抓取"
+      // 从而第2层 processLevel 的 newUrls.filter 把它过滤掉，fetch 永远不会发出
+      if (depth < RELAY_MAX_DEPTH) {
+        const txtDedup = new Set(); // 本页面内去重，不与 fetchedUrls 共享
+        const txts = extractUrlsFromText(content, url, RELAY_TXT_RE, txtDedup);
+        // 过滤掉真正已经抓取过的 URL
+        const newTxts = txts.filter(function(t) { return !fetchedUrls.has(t); });
+        diag.txtFound = newTxts.length;
+
+        // 兜底：HTML 中转页若常规正则没找到 .txt，从 <script> 块专门提取
+        // （纯 JS 下载中转页常把 .txt URL 写在 const X = "..." 中）
+        if (newTxts.length === 0 && sourceType === 'html') {
+          const scriptTxts = extractScriptTxtUrls(content, url, fetchedUrls);
+          diag.scriptTxtFound = scriptTxts.length;
+          if (scriptTxts.length > 0) {
+            console.log('[SW-relay] script兜底提取到 .txt: ' + scriptTxts.length + '个 url=' + urlShort);
+          }
+          // script 提取的 URL 也同样过滤已抓取
+          nextLevelUrls.push(...scriptTxts.filter(function(t) { return !fetchedUrls.has(t); }));
+        } else {
+          nextLevelUrls.push(...newTxts);
+        }
+      }
+      diagnostics.push(diag);
+    }
+
+    totalFailCount += failCount;
+
+    const hits = (relayArchiveUrls.length + txtDerivedArchiveUrls.length) - beforeCount;
+    console.log('[SW-relay] 层完成 d=' + depth + ' type=' + sourceType +
+      ' urls=' + urls.length + ' 压缩包=' + hits + ' txt子=' + nextLevelUrls.length + ' 失败=' + failCount);
+
+    // 首次命中时打印前5个样本，方便排查误匹配
+    if (hits > 0 && depth === 1) {
+      var allArchives = relayArchiveUrls.concat(txtDerivedArchiveUrls);
+      var samples = allArchives.slice(-hits).slice(0, 5);
+      console.log('[SW-relay] 样本:', samples.map(function(s) { return s.ext + ' ' + s.href; }));
+    }
+
+    // 递归下一层 .txt（同层并行）
+    // 本层已找到足够压缩包链接(>20)则跳过更深层递归以提效
+    if (nextLevelUrls.length > 0 && depth < RELAY_MAX_DEPTH && (relayArchiveUrls.length + txtDerivedArchiveUrls.length) < 20) {
+      var limited = nextLevelUrls.slice(0, 2);
+      await processLevel(limited, depth + 1, 'txt');
+    }
+  }
+
+  // ---- 启动：第1层 .txt + 中转页 同时并行 ----
+  const txtEntry = txtUrls.slice(0, 3);
+  await Promise.all([
+    txtEntry.length > 0 ? processLevel(txtEntry, 1, 'txt') : Promise.resolve(),
+    relayUrls.length > 0 ? processLevel(relayUrls, 1, 'html') : Promise.resolve()
+  ]);
+
+  const elapsed = Date.now() - startTime;
+  console.log('[SW-relay] 完成: relay=' + relayArchiveUrls.length +
+    ' txtDerived=' + txtDerivedArchiveUrls.length +
+    ' 耗时=' + elapsed + 'ms');
+
+  const result = {
+    relayArchiveUrls,
+    txtDerivedArchiveUrls,
+    failCount: totalFailCount,
+    diagnostics: diagnostics.slice(0, 10) // 最多10条诊断防止消息过大
+  };
+
+  // ---- 写入缓存 ----
+  _relayCache = { key: cacheKey, result, ts: Date.now() };
+
+  return result;
+}
+
 // ==================== 下载确认临时存储 ====================
 // 存储被拦截的下载信息，供二次确认弹窗回传时使用
 // key: downloadId, value: { downloadUrl, filename, tabId, pageDomain, downloadDomain }
@@ -1121,7 +1432,23 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
     }
 
     // 更新下载状态
-    const fileName = downloadItem.filename.split(/[\\/]/).pop();
+    const rawName = downloadItem.filename || downloadItem.url || '';
+    let fileName = rawName.split(/[\\/]/).pop() || '';
+    // 回退：从下载URL中提取文件名
+    if (!fileName || fileName === rawName) {
+      try {
+        const urlPath = new URL(downloadItem.url || '').pathname;
+        fileName = urlPath.split('/').pop() || '';
+      } catch (e) {}
+    }
+    // 过滤掉明显不是文件名的值（纯查询参数等）
+    if (!fileName || fileName.indexOf('=') !== -1 || fileName.length > 200) {
+      fileName = '未知文件';
+    }
+    // URL解码中文文件名（浏览器把中文encode到URL path里）
+    try {
+      fileName = decodeURIComponent(fileName);
+    } catch (e) { /* 解码失败保持原样 */ }
     tabState.downloadState = {
       hasDownloadedArchive: true,
       archiveFileName: fileName,
@@ -1600,6 +1927,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       })();
       return true;
     }
+
+    // 中转页/TXT 追索请求：content-script 委托 SW fetch（绕过 CORS）
+    case MSG_TYPES.FETCH_RELAY_URLS:
+    case 'FETCH_RELAY_URLS': {
+      const relayPayload = message.payload || {};
+      handleRelayFetch(relayPayload).then(result => {
+        sendResponse({ success: true, data: result });
+      }).catch(err => {
+        sendResponse({ success: false, error: err.message });
+      });
+      return true;
+    }
+
     default: { sendResponse({ error: 'unknown type: ' + type }); break; }
   }
   return false;

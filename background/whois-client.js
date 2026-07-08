@@ -394,19 +394,39 @@ export class WhoisClient {
 
     // 5. RDAP 成功 → 缓存并返回
     if (rdapResult && !rdapResult._rdap?.unsupported && !rdapResult._rdap?.notFound) {
-      const result = {
-        domain: rdapResult.domain || normalizedDomain,
-        domainSuffix: rdapResult.domainSuffix || '',
-        creationDays: rdapResult.creationDays,
-        validDays: rdapResult.validDays,
-        creationTime: rdapResult.creationTime || '',
-        expirationTime: rdapResult.expirationTime || '',
-        isExpire: rdapResult.isExpire || false,
-        registrarName: rdapResult.registrarName || '',
-        domainStatus: rdapResult.domainStatus || [],
-        nameServer: rdapResult.nameServer || [],
-        queryTime: rdapResult.queryTime || new Date().toISOString()
-      };
+      const buildResult = (r) => ({
+        domain: r.domain || normalizedDomain,
+        domainSuffix: r.domainSuffix || '',
+        creationDays: r.creationDays,
+        validDays: r.validDays,
+        creationTime: r.creationTime || '',
+        expirationTime: r.expirationTime || '',
+        isExpire: r.isExpire || false,
+        registrarName: r.registrarName || '',
+        domainStatus: r.domainStatus || [],
+        nameServer: r.nameServer || [],
+        queryTime: r.queryTime || new Date().toISOString()
+      });
+
+      const result = buildResult(rdapResult);
+
+      // ═══ PSL 子域名回退：标准化域名查不到创建日期时，直接用原始域名重查 ═══
+      // 典型场景: bing-dingding.hl.cn → PSL提取 hl.cn → WHOIS无创建日期
+      //           但直接查 bing-dingding.hl.cn 能拿到注册信息（.cn 子域名常有独立 WHOIS）
+      if (result.creationDays < 0 && rawDomain !== normalizedDomain) {
+        console.log(`[WhoisClient] 标准化域名无创建日期，尝试原始域名: ${rawDomain}`);
+        const rawRdapResult = await RdapClient.lookup(rawDomain);
+        if (rawRdapResult && !rawRdapResult._rdap?.unsupported && !rawRdapResult._rdap?.notFound && rawRdapResult.creationDays > 0) {
+          const rawResult = buildResult(rawRdapResult);
+          rawResult.domain = rawDomain; // 保留原始域名用于展示
+          if (rawResult.creationDays > 0) {
+            _cache.set(normalizedDomain, { result: rawResult, timestamp: Date.now() });
+            console.log(`[WhoisClient] 原始域名查询成功: ${rawDomain} (creationDays=${rawResult.creationDays})`);
+          }
+          _lastError = null;
+          return rawResult;
+        }
+      }
 
       if (result.creationDays > 0) {
         _cache.set(normalizedDomain, { result, timestamp: Date.now() });
@@ -439,10 +459,36 @@ export class WhoisClient {
         console.log(`[WhoisClient] WhoisCX 缓存写入: ${normalizedDomain} (creationDays=${whoisResult.creationDays})`);
       }
 
+      // ═══ PSL 子域名回退（WhoisCX 路径）═══
+      if (whoisResult.creationDays < 0 && rawDomain !== normalizedDomain) {
+        console.log(`[WhoisClient] WhoisCX 标准化域名无创建日期，尝试原始域名: ${rawDomain}`);
+        const rawWhoisResult = await _lookupViaWhoisCx(rawDomain);
+        if (rawWhoisResult && rawWhoisResult.creationDays > 0) {
+          rawWhoisResult.domain = rawDomain;
+          _cache.set(normalizedDomain, { result: rawWhoisResult, timestamp: Date.now() });
+          console.log(`[WhoisClient] WhoisCX 原始域名查询成功: ${rawDomain} (creationDays=${rawWhoisResult.creationDays})`);
+          _lastError = null;
+          return rawWhoisResult;
+        }
+      }
+
       _lastError = null;
       const ageLabel = whoisResult.creationDays >= 0 ? `注册 ${whoisResult.creationDays}d` : '注册时间未知';
       console.log(`[WhoisClient] WhoisCX 查询成功: ${normalizedDomain} (${ageLabel}, 注册商: ${whoisResult.registrarName || '未知'})`);
       return whoisResult;
+    }
+
+    // 7b. WhoisCX 对标准化域名失败 → 若原始域名不同，直接用原始域名查 WhoisCX
+    if (rawDomain !== normalizedDomain) {
+      console.log(`[WhoisClient] 标准化域名查失败，尝试原始域名 WhoisCX: ${rawDomain}`);
+      const rawWhoisResult = await _lookupViaWhoisCx(rawDomain);
+      if (rawWhoisResult && rawWhoisResult.creationDays > 0) {
+        rawWhoisResult.domain = rawDomain;
+        _cache.set(normalizedDomain, { result: rawWhoisResult, timestamp: Date.now() });
+        console.log(`[WhoisClient] WhoisCX 原始域名成功: ${rawDomain} (creationDays=${rawWhoisResult.creationDays})`);
+        _lastError = null;
+        return rawWhoisResult;
+      }
     }
 
     // 8. 两条路径均失败 → 尝试逐级向上回退父域名
