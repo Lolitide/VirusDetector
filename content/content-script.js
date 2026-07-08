@@ -42,26 +42,33 @@
    * 向 SW 发送消息（含重试），解决 SW 休眠导致 "Receiving end does not exist" 的问题。
    * SW 在 ~30s 无活动后被浏览器终止；第一次 sendMessage 会唤醒 SW 但回调可能丢失。
    * 最多重试 3 次，间隔 300ms/600ms。
+   *
+   * MV3 注意事项：
+   *  - 使用 Promise 风格（非回调），避免 SW 终止后回调丢失导致未捕获异常
+   *  - 发送前检查 chrome.runtime?.id，扩展上下文已销毁时直接放弃
    */
   async function sendMessageWithRetry(message, maxRetries) {
+    // 扩展上下文已销毁（扩展被卸载/重载），无法恢复，直接放弃
+    if (!chrome.runtime || !chrome.runtime.id) {
+      console.warn('[VirusDetector] 扩展上下文已失效，跳过消息发送');
+      throw new Error('Extension context invalidated');
+    }
+
     maxRetries = maxRetries || 3;
     var lastError = null;
     for (var attempt = 0; attempt < maxRetries; attempt++) {
       try {
-        var result = await new Promise(function(resolve, reject) {
-          chrome.runtime.sendMessage(message, function(response) {
-            if (chrome.runtime.lastError) {
-              reject(new Error(chrome.runtime.lastError.message));
-            } else if (response && response.success) {
-              resolve(response.data);
-            } else {
-              reject(new Error((response && response.error) || 'SW fetch failed'));
-            }
-          });
-        });
-        return result;
+        var response = await chrome.runtime.sendMessage(message);
+        if (response && response.success) {
+          return response.data;
+        }
+        throw new Error((response && response.error) || 'SW fetch failed');
       } catch (e) {
         lastError = e;
+        // 扩展上下文已销毁 — 无需重试
+        if (e.message === 'Extension context invalidated' || !chrome.runtime?.id) {
+          throw e;
+        }
         if (attempt < maxRetries - 1) {
           // 等待 SW 唤醒 + 初始化完成
           await new Promise(function(r) { setTimeout(r, 300 * (attempt + 1)); });
@@ -1043,6 +1050,11 @@
       _firstScanData = { icpStrings: icpStrings, linkMetrics: linkMetrics };
     }
 
+    // 扩展上下文已销毁则跳过发送（避免 "Extension context invalidated" 异常噪音）
+    if (!chrome.runtime || !chrome.runtime.id) {
+      console.warn('[VirusDetector] 扩展上下文已失效，跳过分析结果发送');
+      return;
+    }
     chrome.runtime.sendMessage({
       type: 'PAGE_ANALYSIS_RESULT',
       payload: payload,
