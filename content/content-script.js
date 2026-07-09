@@ -492,15 +492,27 @@
 
     // 3. 委托 Service Worker 进行跨域 fetch（绕过 content-script CORS 限制）
     // SW 拥有 host_permissions，可 fetch 任意域名；content-script 受页面同源策略约束
+    // 优化：只委托跨域 URL，同域 URL content-script 可直接访问，无需 SW 中转
     var relayArchiveUrls = [];
     var txtDerivedArchiveUrls = [];
     var relayFailCount = 0;
 
     var relayUrlsToSend = [];
     for (var p2 = 0; p2 < relayToFetch.length; p2++) {
+      // 跳过同域 URL：content-script 与页面同源，可直接 fetch，无需 SW 中转
+      if (!relayToFetch[p2].isCrossDomain) continue;
       relayUrlsToSend.push(relayToFetch[p2].href);
     }
-    var txtUrlsToSend = uniqueTxtLinks.slice(0, 3);
+
+    // 过滤同域 .txt：只委托跨域 .txt 文件
+    var txtUrlsToSend = [];
+    for (var t2 = 0; t2 < uniqueTxtLinks.length && txtUrlsToSend.length < 3; t2++) {
+      try {
+        var tparsed = new URL(uniqueTxtLinks[t2]);
+        if (tparsed.hostname === currentHost) continue; // 同域跳过
+        txtUrlsToSend.push(uniqueTxtLinks[t2]);
+      } catch (e) { /* 无效 URL 跳过 */ }
+    }
 
     var txtEntryCount = txtUrlsToSend.length;
     console.log('[VirusDetector] 中转页检测委托SW: 下载按钮' + relayUrlsToSend.length + '个, .txt入口' + txtEntryCount + '个');
