@@ -232,8 +232,8 @@ export const GITHUB_RELEASES_PAGE = 'https://github.com/Lolitide/VirusDetector/r
 /** RDAP IANA 引导文件 URL（TLD → RDAP 服务器映射） */
 export const RDAP_BOOTSTRAP_URL = 'https://data.iana.org/rdap/dns.json';
 
-/** WhoisCX API 基础 URL（Whois 回退查询） */
-export const WHOIS_API_URL = 'http://api.whoiscx.com/whois/';
+/** WhoisCX API POST 端点（Whois 回退查询） */
+export const WHOIS_API_URL = 'https://whoiscx.com/api/whois/info/';
 
 /** RDAP 查询结果缓存有效期（毫秒），24小时。缓存由 WhoisClient 共享管理 */
 export const WHOIS_CACHE_TTL = 24 * 60 * 60 * 1000;

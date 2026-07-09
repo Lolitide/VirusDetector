@@ -22,8 +22,8 @@
  *   - RDAP 404（域名未注册）不缓存
  *
  * WhoisCX API 规范：
- *   - 接口地址：GET http://api.whoiscx.com/whois/?domain={domain}
- *   - ⚠️ 仅支持 HTTP（不支持 HTTPS）
+ *   - 接口地址：POST https://whoiscx.com/api/whois/info/
+ *   - 请求体：domain=example.com（application/x-www-form-urlencoded）
  *   - 响应格式：application/json
  *   - 频率限制：2 秒/次（通过串行化请求保证）
  */
@@ -219,8 +219,9 @@ async function _lookupViaWhoisCx(normalizedDomain) {
   // 速率限制等待
   await _waitForWhoisRateLimit();
 
-  const url = `${WHOIS_API_URL}?domain=${encodeURIComponent(normalizedDomain)}`;
-  console.log(`[WhoisClient] WhoisCX 回退查询: ${url}`);
+  const url = WHOIS_API_URL;
+  const requestBody = `domain=${encodeURIComponent(normalizedDomain)}`;
+  console.log(`[WhoisClient] WhoisCX POST 回退查询: ${url} domain=${normalizedDomain}`);
 
   let response;
   try {
@@ -228,12 +229,14 @@ async function _lookupViaWhoisCx(normalizedDomain) {
     const timeoutId = setTimeout(() => controller.abort(), WHOIS_API_TIMEOUT);
 
     response = await fetch(url, {
-      method: 'GET',
+      method: 'POST',
       signal: controller.signal,
       headers: {
-        'Accept': '*/*',
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Accept': 'application/json',
         'User-Agent': `VirusDetector/${VERSION} (Browser Extension; RDAP+WhoisCX)`
-      }
+      },
+      body: requestBody
     });
 
     clearTimeout(timeoutId);
@@ -267,11 +270,11 @@ async function _lookupViaWhoisCx(normalizedDomain) {
   let responseText = '';
   try { responseText = await response.clone().text(); } catch (e) { /* ignore */ }
 
-  // 检查是否为 HTML（WhoisCX API 可能已废弃）
+  // 检查是否为 HTML（WhoisCX 新端点也可能偶发返回 HTML）
   const trimmed = responseText.trim();
   if (trimmed.startsWith('<!DOCTYPE') || trimmed.startsWith('<html')) {
     _recordError(normalizedDomain, 'parse',
-      'WhoisCX API 可能已废弃（返回 HTML 而非 JSON），建议移除或替换此回退路径',
+      'WhoisCX 返回 HTML 而非 JSON，响应体非预期格式',
       { url, responseBody: responseText.substring(0, 200) });
     return null;
   }
