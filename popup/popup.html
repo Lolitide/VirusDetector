@@ -83,14 +83,37 @@
             </div>
             <span class="info-value" id="current-domain">-</span>
           </div>
-          <div class="score-gauge">
-            <div class="gauge-bar">
-              <div class="gauge-segment gauge-green"></div>
-              <div class="gauge-segment gauge-yellow"></div>
-              <div class="gauge-segment gauge-red"></div>
+          <div class="status-badge safe" id="status-text">安全</div>
+        </div>
+
+        <!-- 警告面板 -->
+        <div id="warning-panel" style="display: none">
+          <div class="score-display danger" id="score-display-danger">
+            <div class="score-main">
+              <div class="score-icon" id="warning-score-icon">
+                <svg viewBox="0 0 24 24" width="44" height="44">
+                  <path d="M12 2L1 22h22L12 2z" fill="#F44336" />
+                  <path
+                    d="M12 10v4M12 17.5v.5"
+                    stroke="white"
+                    stroke-width="2.5"
+                    stroke-linecap="round"
+                  />
+                </svg>
+              </div>
+              <div class="score-value danger-color" id="warning-score-value">
+                0
+              </div>
             </div>
-            <div class="gauge-indicator" id="safe-gauge-indicator">
-              <div class="gauge-arrow"></div>
+            <div class="score-gauge">
+              <div class="gauge-bar">
+                <div class="gauge-segment gauge-green"></div>
+                <div class="gauge-segment gauge-yellow"></div>
+                <div class="gauge-segment gauge-red"></div>
+              </div>
+              <div class="gauge-indicator" id="warning-gauge-indicator">
+                <div class="gauge-arrow"></div>
+              </div>
             </div>
           </div>
         </div>
@@ -161,12 +184,41 @@
                 stroke-linejoin="round" />
             </svg>
           </div>
-          <div class="whitelist-hint">
-            <p>当前网站已加入白名单，跳过所有检测</p>
-            <p class="whitelist-hint-sub">移除白名单可恢复安全检测</p>
+          <div class="collapsible-content">
+            <div class="collapsible-inner">
+              <div class="detail-items">
+                <div class="detail-item" id="detail-rule1">
+                  <span class="detail-icon"></span>
+                  <span class="detail-text">域名仿冒检测: 待检测</span>
+                </div>
+                <div class="detail-item" id="detail-rule2">
+                  <span class="detail-icon"></span>
+                  <span class="detail-text">下载检测: 待检测</span>
+                </div>
+                <div class="detail-item" id="detail-rule3">
+                  <span class="detail-icon"></span>
+                  <span class="detail-text">ICP备案: 待检测</span>
+                </div>
+                <div class="detail-item" id="detail-rule4">
+                  <span class="detail-icon"></span>
+                  <span class="detail-text">链接分析: 待检测</span>
+                </div>
+                <div class="detail-item" id="detail-rule5">
+                  <span class="detail-icon"></span>
+                  <span class="detail-text">代码工程化: 待检测</span>
+                </div>
+                <div class="detail-item" id="detail-domainAge">
+                  <span class="detail-icon"></span>
+                  <span class="detail-text">域名年龄: 待检测</span>
+                </div>
+                <div class="detail-item" id="detail-ageBonus">
+                  <span class="detail-icon"></span>
+                  <span class="detail-text">域名减分: 待检测</span>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
-      </div>
 
       <!-- 5规则检测详情 -->
       <div id="details-section" class="collapsible-section">
@@ -215,6 +267,12 @@
               </div>
             </div>
           </div>
+          <ul>
+            <li>不要在此网站输入任何个人信息</li>
+            <li>不要下载或运行此网站的任何文件</li>
+            <li>立即关闭此页面并前往官方网站</li>
+            <li>通过官方渠道下载软件</li>
+          </ul>
         </div>
       </div>
 

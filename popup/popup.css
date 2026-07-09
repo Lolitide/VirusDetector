@@ -875,6 +875,11 @@ body {
   background-color: #E4FFE1;
 }
 
+#refresh-btn:hover:not(:disabled) {
+  border-color: var(--green);
+  color: var(--green);
+}
+
 .footer-version {
   font-size: 11px;
   color: var(--text3);
