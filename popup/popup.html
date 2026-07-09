@@ -1,409 +1,283 @@
 <!doctype html>
 <html lang="zh-CN" style="display:none">
-  <head>
-    <script src="theme-init.js"></script>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>银狐木马检测</title>
-    <link rel="stylesheet" href="popup.css" />
-  </head>
-  <body>
-    <div id="app">
-      <!-- 标题栏 -->
-      <div id="header" class="header-safe">
-        <div class="bg-container" id="bg-container"></div>
-        <div class="header-icon">
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            viewBox="0 0 128 128"
-            fill="none"
-          >
-            <!-- 外轮廓 -->
-            <path
-              d="M22 10
+
+<head>
+  <script src="theme-init.js"></script>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>银狐木马检测</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+
+<body>
+  <div id="app">
+    <!-- 标题栏 -->
+    <div id="header" class="header-safe">
+      <div class="bg-container" id="bg-container"></div>
+      <div class="header-icon">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">
+          <!-- 外轮廓 -->
+          <path d="M22 10
            H106
            A16 16 0 0 1 122 26
            V88
            L64 120
            L6 88
            V26
-           A16 16 0 0 1 22 10Z"
-              stroke="white"
-              stroke-width="6"
-              stroke-linejoin="round"
-              stroke-linecap="round"
-            />
+           A16 16 0 0 1 22 10Z" stroke="white" stroke-width="6" stroke-linejoin="round" stroke-linecap="round" />
 
-            <!-- 勾 -->
-            <path
-              d="M47 66
+          <!-- 勾 -->
+          <path d="M47 66
            L62 81
-           L86 48"
-              transform="translate(0,8)"
-              stroke="white"
-              stroke-width="8"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            />
-          </svg>
-        </div>
-        <div class="header-text">
-          银狐木马检测<br /><span class="header-subtitle">Virus Detector</span>
-        </div>
-        <div class="header-actions">
-          <button class="header-icon-btn" id="github-btn" title="GitHub">
-            <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor">
-              <path
-                d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"
-              />
-            </svg>
-          </button>
-
-          <div class="github-background">
-            <span class="github-tooltip" id="github-tooltip">了解更多</span>
-          </div>
-
-          <button class="header-icon-btn" id="settings-btn" title="设置">
-            <svg
-              viewBox="0 0 24 24"
-              width="22"
-              height="22"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-            >
-              <circle cx="12" cy="12" r="3" />
-              <path
-                d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"
-              />
-            </svg>
-          </button>
-        </div>
+           L86 48" transform="translate(0,8)" stroke="white" stroke-width="8" stroke-linecap="round"
+            stroke-linejoin="round" />
+        </svg>
       </div>
-
-      <!-- 内容区 -->
-      <div id="main-content">
-        <!-- 加载 -->
-        <div id="loading">
-          <div class="spinner"></div>
-          <p>正在分析网站...</p>
-        </div>
-
-        <!-- 安全面板 -->
-        <div id="safe-panel" style="display: none">
-          <div class="score-display safe" id="score-display-safe">
-            <div class="score-main">
-              <div class="score-up">
-                <div class="score-icon" id="safe-score-icon">
-                  <svg viewBox="0 0 24 24" width="44" height="44">
-                    <circle cx="12" cy="12" r="11" fill="#4CAF50" />
-                    <path
-                      d="M7 12l3 3 7-7"
-                      stroke="white"
-                      stroke-width="2.5"
-                      fill="none"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                    />
-                  </svg>
-                </div>
-                <div class="score-value safe-color" id="score-value">0</div>
-              </div>
-              <span class="info-value" id="current-domain">-</span>
-            </div>
-            <div class="score-gauge">
-              <div class="gauge-bar">
-                <div class="gauge-segment gauge-green"></div>
-                <div class="gauge-segment gauge-yellow"></div>
-                <div class="gauge-segment gauge-red"></div>
-              </div>
-              <div class="gauge-indicator" id="safe-gauge-indicator">
-                <div class="gauge-arrow"></div>
-              </div>
-            </div>
-          </div>
-          <div class="status-badge safe" id="status-text">安全</div>
-        </div>
-
-        <!-- 警告面板 -->
-        <div id="warning-panel" style="display: none">
-          <div class="score-display danger" id="score-display-danger">
-            <div class="score-main">
-              <div class="score-icon" id="warning-score-icon">
-                <svg viewBox="0 0 24 24" width="44" height="44">
-                  <path d="M12 2L1 22h22L12 2z" fill="#F44336" />
-                  <path
-                    d="M12 10v4M12 17.5v.5"
-                    stroke="white"
-                    stroke-width="2.5"
-                    stroke-linecap="round"
-                  />
-                </svg>
-              </div>
-              <div class="score-value danger-color" id="warning-score-value">
-                0
-              </div>
-            </div>
-            <div class="score-gauge">
-              <div class="gauge-bar">
-                <div class="gauge-segment gauge-green"></div>
-                <div class="gauge-segment gauge-yellow"></div>
-                <div class="gauge-segment gauge-red"></div>
-              </div>
-              <div class="gauge-indicator" id="warning-gauge-indicator">
-                <div class="gauge-arrow"></div>
-              </div>
-            </div>
-          </div>
-          <div class="status-badge danger" id="warning-status-text">
-            危险警告
-          </div>
-          <div class="alert-box">
-            <div class="alert-icon">
-              <svg viewBox="0 0 24 24" width="24" height="24">
-                <path d="M12 2L1 22h22L12 2z" fill="#F44336" />
-                <path
-                  d="M12 10v4M12 17.5v.5"
-                  stroke="white"
-                  stroke-width="2.5"
-                  stroke-linecap="round"
-                />
-              </svg>
-            </div>
-            <div class="alert-text">
-              <strong>风险警告</strong>
-              <p>
-                该网站疑似银狐木马钓鱼网站！请勿输入任何个人信息或下载文件。
-              </p>
-            </div>
-          </div>
-          <div id="official-link-section" style="display: none">
-            <a
-              id="official-link-btn"
-              class="official-link-btn"
-              href="#"
-              target="_blank"
-            >
-              <svg
-                viewBox="0 0 24 24"
-                width="16"
-                height="16"
-                fill="none"
-                stroke="white"
-                stroke-width="2.5"
-                stroke-linecap="round"
-              >
-                <path d="M5 12l4 4 9-9" />
-              </svg>
-              前往官方网站
-              <span id="official-link-text"></span>
-            </a>
-          </div>
-        </div>
-
-        <!-- 白名单面板 -->
-        <div id="whitelist-panel" style="display: none">
-          <div class="score-display whitelist">
-            <div class="score-icon" style="padding: 8px 0 4px 0">
-              <svg viewBox="0 0 24 24" width="44" height="44">
-                <circle cx="12" cy="12" r="11" fill="#4CAF50" />
-                <path
-                  d="M7 12l3 3 7-7"
-                  stroke="white"
-                  stroke-width="3"
-                  fill="none"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                />
-              </svg>
-            </div>
-            <div class="whitelist-hint">
-              <p>当前网站已加入白名单，跳过所有检测</p>
-              <p class="whitelist-hint-sub">移除白名单可恢复安全检测</p>
-            </div>
-          </div>
-        </div>
-
-        <!-- 5规则检测详情 -->
-        <div id="details-section" class="collapsible-section">
-          <div class="details-title" id="details-toggle">
-            <svg
-              viewBox="0 0 24 24"
-              width="16"
-              height="16"
-              fill="none"
-              stroke="#a0a0a0"
-              stroke-width="2"
-              stroke-linecap="round"
-            >
-              <circle cx="11" cy="11" r="7" />
-              <path d="M21 21l-4.3-4.3" />
-            </svg>
-            检测详情
-            <svg
-              class="collapse-chevron"
-              viewBox="0 0 24 24"
-              width="14"
-              height="14"
-              fill="none"
-              stroke="#a0a0a0"
-              stroke-width="2.5"
-              stroke-linecap="round"
-            >
-              <path d="M6 9l6 6 6-6" />
-            </svg>
-          </div>
-          <div class="collapsible-content">
-            <div class="collapsible-inner">
-              <div class="detail-items">
-                <div class="detail-item" id="detail-rule1">
-                  <span class="detail-icon"></span>
-                  <span class="detail-text">域名仿冒检测: 待检测</span>
-                </div>
-                <div class="detail-item" id="detail-rule2">
-                  <span class="detail-icon"></span>
-                  <span class="detail-text">下载检测: 待检测</span>
-                </div>
-                <div class="detail-item" id="detail-rule3">
-                  <span class="detail-icon"></span>
-                  <span class="detail-text">ICP备案: 待检测</span>
-                </div>
-                <div class="detail-item" id="detail-rule4">
-                  <span class="detail-icon"></span>
-                  <span class="detail-text">链接分析: 待检测</span>
-                </div>
-                <div class="detail-item" id="detail-rule5">
-                  <span class="detail-icon"></span>
-                  <span class="detail-text">代码工程化: 待检测</span>
-                </div>
-                <div class="detail-item" id="detail-domainAge">
-                  <span class="detail-icon"></span>
-                  <span class="detail-text">域名年龄: 待检测</span>
-                </div>
-                <div class="detail-item" id="detail-ageBonus">
-                  <span class="detail-icon"></span>
-                  <span class="detail-text">域名减分: 待检测</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- 安全建议（仅警告时） -->
-        <div id="safety-tips" style="display: none">
-          <div class="tips-title">
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="#C62828">
-              <circle cx="12" cy="12" r="10" fill="#F44336" opacity=".2" />
-              <path
-                d="M12 8v5M12 16.5v.5"
-                stroke="#C62828"
-                stroke-width="2"
-                stroke-linecap="round"
-              />
-            </svg>
-            安全建议
-          </div>
-          <ul>
-            <li>不要在此网站输入任何个人信息</li>
-            <li>不要下载或运行此网站的任何文件</li>
-            <li>立即关闭此页面并前往官方网站</li>
-            <li>通过官方渠道下载软件</li>
-          </ul>
-        </div>
+      <div class="header-text">
+        银狐木马检测<br /><span class="header-subtitle">Virus Detector</span>
       </div>
+      <div class="header-actions">
+        <button class="header-icon-btn" id="github-btn" title="GitHub">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor">
+            <path
+              d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z" />
+          </svg>
+        </button>
 
-      <!-- 底部工具栏 -->
-      <div id="footer">
-        <button
-          id="report-false-btn"
-          class="footer-btn report-btn mistake-btn"
-          title="报告此网站为误报"
-        >
-          <svg
-            viewBox="0 0 24 24"
-            width="14"
-            height="14"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-          >
-            <circle cx="12" cy="12" r="10" />
-            <path d="M12 8v4M12 16h.01" />
-          </svg>
-          <span class="btn-label">此报告有误</span>
-        </button>
-        <button
-          id="report-phish-btn"
-          class="footer-btn report-btn danger-btn"
-          title="确认此网站为钓鱼网站"
-        >
-          <svg
-            viewBox="0 0 24 24"
-            width="14"
-            height="14"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-          >
-            <path d="M12 2L1 22h22L12 2z" />
-            <path d="M12 10v4M12 17.5v.5" />
-          </svg>
-          <span class="btn-label">鉴定为钓鱼</span>
-        </button>
-        <button
-          id="whitelist-btn"
-          class="footer-btn whitelist-btn"
-          title="将当前网站加入白名单，跳过所有检测"
-        >
-          <svg
-            viewBox="0 0 24 24"
-            width="14"
-            height="14"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-          >
+        <div class="github-background">
+          <span class="github-tooltip" id="github-tooltip">了解更多</span>
+        </div>
+
+        <button class="header-icon-btn" id="settings-btn" title="设置">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round">
+            <circle cx="12" cy="12" r="3" />
             <path
-              d="M12 2l3.1 6.3L22 9.3l-5 4.9 1.2 6.8-6.2-3.3-6.2 3.3 1.2-6.8-5-4.9 6.9-1z"
-            />
+              d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" />
           </svg>
-          <span class="btn-label">加入白名单</span>
         </button>
-        <button
-          id="refresh-btn"
-          class="footer-btn"
-          title="对网页病毒进行再检测"
-        >
-          <svg
-            role="img"
-            xmlns="http://www.w3.org/2000/svg"
-            width="57px"
-            height="57px"
-            viewBox="0 0 24 24"
-            aria-labelledby="refreshIconTitle"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="square"
-            stroke-linejoin="miter"
-            fill="none"
-          >
-            <polyline points="22 12 19 15 16 12" />
-            <path
-              d="M11,20 C6.581722,20 3,16.418278 3,12 C3,7.581722 6.581722,4 11,4 C15.418278,4 19,7.581722 19,12 L19,14"
-            />
-          </svg>
-          <span class="btn-label">重新测一遍</span>
-        </button>
-        <span class="tip-up">有</span>
-        <span class="tip-down">问题</span>
-        <span class="tip-icon">?</span>
       </div>
     </div>
 
-    <script src="popup.js"></script>
-  </body>
+    <!-- 内容区 -->
+    <div id="main-content">
+      <!-- 加载 -->
+      <div id="loading">
+        <div class="spinner"></div>
+        <p>正在分析网站...</p>
+      </div>
+
+      <!-- 安全面板 -->
+      <div id="safe-panel" style="display: none">
+        <div class="score-display safe" id="score-display-safe">
+          <div class="score-main">
+            <div class="score-up">
+              <div class="score-icon" id="safe-score-icon">
+                <svg viewBox="0 0 24 24" width="44" height="44">
+                  <circle cx="12" cy="12" r="11" fill="#4CAF50" />
+                  <path d="M7 12l3 3 7-7" stroke="white" stroke-width="2.5" fill="none" stroke-linecap="round"
+                    stroke-linejoin="round" />
+                </svg>
+              </div>
+              <div class="score-value safe-color" id="score-value">0</div>
+            </div>
+            <span class="info-value" id="current-domain">-</span>
+          </div>
+          <div class="score-gauge">
+            <div class="gauge-bar">
+              <div class="gauge-segment gauge-green"></div>
+              <div class="gauge-segment gauge-yellow"></div>
+              <div class="gauge-segment gauge-red"></div>
+            </div>
+            <div class="gauge-indicator" id="safe-gauge-indicator">
+              <div class="gauge-arrow"></div>
+            </div>
+          </div>
+        </div>
+        <div class="status-badge safe" id="status-text">安全</div>
+      </div>
+
+      <!-- 警告面板 -->
+      <div id="warning-panel" style="display: none">
+        <div class="score-display danger" id="score-display-danger">
+          <div class="score-main">
+            <div class="score-icon" id="warning-score-icon">
+              <svg viewBox="0 0 24 24" width="44" height="44">
+                <path d="M12 2L1 22h22L12 2z" fill="#F44336" />
+                <path d="M12 10v4M12 17.5v.5" stroke="white" stroke-width="2.5" stroke-linecap="round" />
+              </svg>
+            </div>
+            <div class="score-value danger-color" id="warning-score-value">
+              0
+            </div>
+          </div>
+          <div class="score-gauge">
+            <div class="gauge-bar">
+              <div class="gauge-segment gauge-green"></div>
+              <div class="gauge-segment gauge-yellow"></div>
+              <div class="gauge-segment gauge-red"></div>
+            </div>
+            <div class="gauge-indicator" id="warning-gauge-indicator">
+              <div class="gauge-arrow"></div>
+            </div>
+          </div>
+        </div>
+        <div class="status-badge danger" id="warning-status-text">
+          危险警告
+        </div>
+        <div class="alert-box">
+          <div class="alert-icon">
+            <svg viewBox="0 0 24 24" width="24" height="24">
+              <path d="M12 2L1 22h22L12 2z" fill="#F44336" />
+              <path d="M12 10v4M12 17.5v.5" stroke="white" stroke-width="2.5" stroke-linecap="round" />
+            </svg>
+          </div>
+          <div class="alert-text">
+            <strong>风险警告</strong>
+            <p>
+              该网站疑似银狐木马钓鱼网站！请勿输入任何个人信息或下载文件。
+            </p>
+          </div>
+        </div>
+        <div id="official-link-section" style="display: none">
+          <a id="official-link-btn" class="official-link-btn" href="#" target="_blank">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="white" stroke-width="2.5"
+              stroke-linecap="round">
+              <path d="M5 12l4 4 9-9" />
+            </svg>
+            前往官方网站
+            <span id="official-link-text"></span>
+          </a>
+        </div>
+      </div>
+
+      <!-- 白名单面板 -->
+      <div id="whitelist-panel" style="display: none">
+        <div class="score-display whitelist">
+          <div class="score-icon" style="padding: 8px 0 4px 0">
+            <svg viewBox="0 0 24 24" width="44" height="44">
+              <circle cx="12" cy="12" r="11" fill="#4CAF50" />
+              <path d="M7 12l3 3 7-7" stroke="white" stroke-width="3" fill="none" stroke-linecap="round"
+                stroke-linejoin="round" />
+            </svg>
+          </div>
+          <div class="whitelist-hint">
+            <p>当前网站已加入白名单，跳过所有检测</p>
+            <p class="whitelist-hint-sub">移除白名单可恢复安全检测</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- 5规则检测详情 -->
+      <div id="details-section" class="collapsible-section">
+        <div class="details-title" id="details-toggle">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#a0a0a0" stroke-width="2"
+            stroke-linecap="round">
+            <circle cx="11" cy="11" r="7" />
+            <path d="M21 21l-4.3-4.3" />
+          </svg>
+          检测详情
+          <svg class="collapse-chevron" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#a0a0a0"
+            stroke-width="2.5" stroke-linecap="round">
+            <path d="M6 9l6 6 6-6" />
+          </svg>
+        </div>
+        <div class="collapsible-content">
+          <div class="collapsible-inner">
+            <div class="detail-items">
+              <div class="detail-item" id="detail-rule1">
+                <span class="detail-icon"></span>
+                <span class="detail-text">域名仿冒检测: 待检测</span>
+              </div>
+              <div class="detail-item" id="detail-rule2">
+                <span class="detail-icon"></span>
+                <span class="detail-text">下载检测: 待检测</span>
+              </div>
+              <div class="detail-item" id="detail-rule3">
+                <span class="detail-icon"></span>
+                <span class="detail-text">ICP备案: 待检测</span>
+              </div>
+              <div class="detail-item" id="detail-rule4">
+                <span class="detail-icon"></span>
+                <span class="detail-text">链接分析: 待检测</span>
+              </div>
+              <div class="detail-item" id="detail-rule5">
+                <span class="detail-icon"></span>
+                <span class="detail-text">代码工程化: 待检测</span>
+              </div>
+              <div class="detail-item" id="detail-domainAge">
+                <span class="detail-icon"></span>
+                <span class="detail-text">域名年龄: 待检测</span>
+              </div>
+              <div class="detail-item" id="detail-ageBonus">
+                <span class="detail-icon"></span>
+                <span class="detail-text">域名减分: 待检测</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 安全建议（仅警告时） -->
+      <div id="safety-tips" style="display: none">
+        <div class="tips-title">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="#C62828">
+            <circle cx="12" cy="12" r="10" fill="#F44336" opacity=".2" />
+            <path d="M12 8v5M12 16.5v.5" stroke="#C62828" stroke-width="2" stroke-linecap="round" />
+          </svg>
+          安全建议
+        </div>
+        <ul>
+          <li>不要在此网站输入任何个人信息</li>
+          <li>不要下载或运行此网站的任何文件</li>
+          <li>立即关闭此页面并前往官方网站</li>
+          <li>通过官方渠道下载软件</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- 底部工具栏 -->
+    <div id="footer">
+      <button id="report-false-btn" class="footer-btn report-btn mistake-btn" title="报告此网站为误报">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"
+          stroke-linecap="round">
+          <circle cx="12" cy="12" r="10" />
+          <path d="M12 8v4M12 16h.01" />
+        </svg>
+        <span class="btn-label">此报告有误</span>
+      </button>
+      <button id="report-phish-btn" class="footer-btn report-btn danger-btn" title="确认此网站为钓鱼网站">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"
+          stroke-linecap="round">
+          <path d="M12 2L1 22h22L12 2z" />
+          <path d="M12 10v4M12 17.5v.5" />
+        </svg>
+        <span class="btn-label">鉴定为钓鱼</span>
+      </button>
+      <button id="whitelist-btn" class="footer-btn whitelist-btn" title="将当前网站加入白名单，跳过所有检测">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"
+          stroke-linecap="round">
+          <path d="M12 2l3.1 6.3L22 9.3l-5 4.9 1.2 6.8-6.2-3.3-6.2 3.3 1.2-6.8-5-4.9 6.9-1z" />
+        </svg>
+        <span class="btn-label">加入白名单</span>
+      </button>
+      <button id="refresh-btn" class="footer-btn" title="对网页病毒进行再检测">
+        <svg role="img" xmlns="http://www.w3.org/2000/svg" width="57px" height="57px" viewBox="0 0 24 24"
+          aria-labelledby="refreshIconTitle" stroke="currentColor" stroke-width="2" stroke-linecap="square"
+          stroke-linejoin="miter" fill="none">
+          <polyline points="22 12 19 15 16 12" />
+          <path
+            d="M11,20 C6.581722,20 3,16.418278 3,12 C3,7.581722 6.581722,4 11,4 C15.418278,4 19,7.581722 19,12 L19,14" />
+        </svg>
+        <span class="btn-label">重新测一遍</span>
+      </button>
+      <span class="tip-up">有</span>
+      <span class="tip-down">问题</span>
+      <span class="tip-icon">?</span>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+
 </html>

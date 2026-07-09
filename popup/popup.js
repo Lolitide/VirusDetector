@@ -26,7 +26,7 @@
     // 白名单取消星标
     starOff: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="3" x2="21" y2="21"/><path d="M12 2l3.1 6.3L22 9.3l-5 4.9 1.2 6.8-6.2-3.3-6.2 3.3 1.2-6.8-5-4.9 6.9-1z"/></svg>',
     // 刷新
-    refresh: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.5 9a9 9 0 0114.8-3.7L23 10M.5 15a9 9 0 0014.8 3.7L20 15"/></svg>',
+    refresh: '<svg role="img" xmlns="http://www.w3.org/2000/svg" width="57px" height="57px" viewBox="0 0 24 24"          aria-labelledby="refreshIconTitle" stroke="currentColor" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter" fill="none"><polyline points="22 12 19 15 16 12" /><path d="M11,20 C6.581722,20 3,16.418278 3,12 C3,7.581722 6.581722,4 11,4 C15.418278,4 19,7.581722 19,12 L19,14" /></svg>',
     // 绿色大勾（白名单/安全分数）
     checkLarge: '<svg viewBox="0 0 24 24" width="44" height="44"><circle cx="12" cy="12" r="11" fill="#4CAF50"/><path d="M7 12l3 3 7-7" stroke="white" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   };
@@ -192,7 +192,7 @@
     els.scoreValue.textContent = score;
     // 动态更新评分卡片（颜色、图标、刻度尺指示器）
     updateScoreDisplay(els.scoreValue, els.safeGaugeIndicator, els.safeScoreIcon, score, false);
-    if (els.currentDomain) els.currentDomain.textContent = data.domain || '该页面不支持/不进行检测';
+    if (els.currentDomain) els.currentDomain.textContent = data.domain || '';
   }
 
   function showWhitelisted(data) {
@@ -282,7 +282,7 @@
 
         if (rule && rule.icpVerified && rule.icpNumbers && rule.icpNumbers.length > 0) {
           // 已核验 → 显示工信部查询链接
-          textEl.textContent = `ICP备案: 已检测到 (${rule.icpNumbers[0]})`;
+          textEl.textContent = `ICP备案: 检测到 (${rule.icpNumbers[0]})`;
           const linkEl = document.createElement('a');
           linkEl.className = 'icp-query-link';
           linkEl.href = 'https://beian.miit.gov.cn/';
@@ -371,11 +371,11 @@
 
   els.refreshBtn.addEventListener('click', async () => {
     showLoading();
-    els.refreshBtn.innerHTML = ICONS.pending + '<span class="btn-label">检测中...</span>';
+    els.refreshBtn.innerHTML = ICONS.pending + '<span class="btn-label">正在检测...</span>';
     els.refreshBtn.disabled = true;
     await requestReanalysis();
     await render();
-    els.refreshBtn.innerHTML = ICONS.refresh + '<span class="btn-label">重新检测</span>';
+    els.refreshBtn.innerHTML = ICONS.refresh + '<span class="btn-label">重新测一遍</span>';
     els.refreshBtn.disabled = false;
   });
 
@@ -475,7 +475,7 @@
         await render();
       } catch (e) {
         console.error('[Popup] 钓鱼确认上报失败:', e);
-        reportPhishBtn.querySelector('.btn-label').textContent = '确认钓鱼';
+        reportPhishBtn.querySelector('.btn-label').textContent = '鉴定为钓鱼';
         reportPhishBtn.disabled = false;
       }
     });
@@ -493,7 +493,7 @@
     pendingConfirm = false;
     if (confirmTimer) { clearTimeout(confirmTimer); confirmTimer = null; }
     if (reportPhishBtn) {
-      reportPhishBtn.querySelector('.btn-label').textContent = '确认钓鱼';
+      reportPhishBtn.querySelector('.btn-label').textContent = '鉴定为钓鱼';
       reportPhishBtn.style.color = '';
       reportPhishBtn.style.borderColor = '';
     }
@@ -581,7 +581,7 @@
       const theme = settings.theme || 'dark';
       document.documentElement.setAttribute('data-theme', theme);
       // 同步到 localStorage 以便下次加载无闪烁
-      try { localStorage.setItem('vt_theme', theme); } catch(e) {}
+      try { localStorage.setItem('vt_theme', theme); } catch (e) { }
     } catch (e) {
       document.documentElement.setAttribute('data-theme', 'dark');
     }

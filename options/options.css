@@ -1020,59 +1020,90 @@ select:focus {
   50% { box-shadow: 0 0 0 6px rgba(76, 175, 80, 0); }
 }
 
+/* ===== Drawer Controls (hidden on wide screens) ===== */
+#drawer-overlay,
+#drawer-toggle-btn,
+#drawer-close-btn {
+  display: none;
+}
+
 /* ===== Responsive ===== */
 @media (max-width: 720px) {
-  #app {
-    flex-direction: column;
-  }
-
   #sidebar {
-    width: 100%;
-    min-width: 100%;
-    height: auto;
-    position: relative;
-    flex-direction: row;
-    flex-wrap: wrap;
-    padding: 8px;
-    border-right: none;
-    border-bottom: 1px solid var(--border);
-    overflow-y: visible;
-  }
-
-  .sidebar-header {
-    padding: 8px 12px;
-    border-bottom: none;
-    min-width: 140px;
-  }
-
-  #sidebar-nav {
+    position: fixed;
+    left: 0;
+    top: 0;
+    width: var(--sidebar-width);
+    min-width: var(--sidebar-width);
+    height: 100vh;
+    z-index: 999;
+    transform: translateX(-100%);
+    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    border-right: 1px solid var(--border);
     display: flex;
-    flex-direction: row;
-    flex-wrap: wrap;
-    padding: 4px;
-    gap: 4px;
+    flex-direction: column;
+    overflow-y: auto;
+    overflow-x: hidden;
   }
 
-  .nav-item {
-    width: auto;
-    padding: 8px 12px;
-    margin: 0;
-    font-size: 12px;
-    border-radius: 20px;
+  #sidebar.open {
+    transform: translateX(0);
   }
 
-  .sidebar-footer {
-    border-top: none;
-    padding: 4px 8px;
+  #drawer-overlay {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    z-index: 998;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.3s ease, visibility 0.3s ease;
+  }
+
+  #drawer-overlay.open {
+    opacity: 1;
+    visibility: visible;
+  }
+
+  body.drawer-active {
+    overflow: hidden;
+  }
+
+  #drawer-toggle-btn {
+    display: inline-flex;
+  }
+
+  #drawer-close-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    width: 100%;
+    padding: 12px 16px;
+    margin-top: 12px;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text2);
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 14px;
+    transition: all 0.2s ease;
+  }
+
+  #drawer-close-btn:hover {
+    background: var(--bg3);
+    color: var(--text);
   }
 
   #section-container {
-    padding: 16px;
+    padding: 20px 16px 80px;
   }
 
   #actions-bar {
     padding: 12px 16px;
-    flex-wrap: wrap;
+    gap: 8px;
   }
 
   .setting-row {

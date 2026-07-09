@@ -3,7 +3,7 @@
 > Chrome/Edge 浏览器扩展，实时检测银狐木马（Silver Fox Trojan）钓鱼与仿冒网站。
 
 [![Manifest](https://img.shields.io/badge/Manifest-V3-blue)](https://developer.chrome.com/docs/extensions/mv3/)
-[![Version](https://img.shields.io/badge/Version-2.4.2-orange)](https://github.com)
+[![Version](https://img.shields.io/badge/Version-2.5.0-orange)](https://github.com)
 
 ---
 

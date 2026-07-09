@@ -90,6 +90,13 @@
           <button class="mode-segment" data-mode="advanced">高级</button>
           <button class="mode-segment" data-mode="developer">开发者</button>
         </div>
+        <button id="drawer-close-btn">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <line x1="18" y1="6" x2="6" y2="18"/>
+            <line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+          关闭
+        </button>
       </div>
     </aside>
 
@@ -100,6 +107,13 @@
 
       <!-- Actions bar -->
       <div id="actions-bar">
+        <button id="drawer-toggle-btn" class="btn" title="打开菜单">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <line x1="3" y1="6" x2="21" y2="6"/>
+            <line x1="3" y1="12" x2="21" y2="12"/>
+            <line x1="3" y1="18" x2="21" y2="18"/>
+          </svg>
+        </button>
         <button id="import-btn" class="btn" title="从 JSON 文件导入设置">
           <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
           导入设置
@@ -132,6 +146,9 @@
         <input type="file" id="import-file" accept=".json" style="display:none">
       </div>
     </main>
+
+    <!-- Drawer overlay -->
+    <div id="drawer-overlay"></div>
 
     <!-- Toast container -->
     <div id="toast-container"></div>

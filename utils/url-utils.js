@@ -219,6 +219,16 @@ export class UrlUtils {
   }
 
   /**
+   * 检查 PSL 缓存是否命中（DNS 已返回结果）。
+   * 返回 false 表示将使用回退 TLD 集，结果可能不准确。
+   * @param {string} hostname
+   * @returns {boolean}
+   */
+  static hasPslCache(hostname) {
+    return _pslCache.has(hostname);
+  }
+
+  /**
    * 检查两个域名是否属于同一主域名
    * @param {string} hostname1
    * @param {string} hostname2

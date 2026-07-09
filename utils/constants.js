@@ -9,7 +9,7 @@
 
 // ==================== 版本号（统一入口） ====================
 /** 当前扩展版本号，所有模块引用此常量，发版时仅需修改此处 + manifest.json + README */
-export const VERSION = '2.4.2';
+export const VERSION = '2.5.0';
 
 // ==================== 评分体系 ====================
 /** 触发警告的总分阈值（注入拦截 + 警告窗口 + 图标变红） */
@@ -232,7 +232,7 @@ export const GITHUB_RELEASES_PAGE = 'https://github.com/Lolitide/VirusDetector/r
 export const RDAP_BOOTSTRAP_URL = 'https://data.iana.org/rdap/dns.json';
 
 /** WhoisCX API 基础 URL（Whois 回退查询） */
-export const WHOIS_API_URL = 'http://api.whoiscx.com/whois/';
+export const WHOIS_API_URL = 'https://whoiscx.com/api/whois/info/';
 
 /** RDAP 查询结果缓存有效期（毫秒），24小时。缓存由 WhoisClient 共享管理 */
 export const WHOIS_CACHE_TTL = 24 * 60 * 60 * 1000;
