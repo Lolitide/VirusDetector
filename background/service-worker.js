@@ -1089,6 +1089,44 @@ async function fetchWithTimeoutSW(url, timeoutMs) {
 }
 
 /**
+ * 通过 HEAD 请求解析下载文件名（从 Content-Disposition 响应头提取）
+ * 当 downloadItem.filename 为空且 URL 不含文件名时使用
+ * @param {string} url - 下载 URL
+ * @returns {Promise<string|null>} 解析到的文件名，失败返回 null
+ */
+async function resolveFilenameFromHeaders(url) {
+  try {
+    const resp = await fetchWithTimeoutSW(url, 3000);
+    const cd = resp.headers.get('Content-Disposition');
+    if (!cd) return null;
+
+    // 优先 RFC 5987: filename*=UTF-8''...
+    const rfc5987Match = cd.match(/filename\*=UTF-8''([^;]+)/i);
+    if (rfc5987Match) {
+      try {
+        return decodeURIComponent(rfc5987Match[1].trim());
+      } catch (e) { /* fall through */ }
+    }
+
+    // 其次标准 filename="..."
+    const filenameMatch = cd.match(/filename="([^"]+)"/i) || cd.match(/filename=([^;]+)/i);
+    if (filenameMatch) {
+      return filenameMatch[1].trim().replace(/^["']|["']$/g, '');
+    }
+
+    // 兜底：从最终 URL（跟随重定向后）的 pathname 提取
+    const finalPath = new URL(resp.url).pathname;
+    const pathName = finalPath.split('/').pop();
+    if (pathName && pathName.indexOf('=') === -1 && pathName.length <= 200) {
+      return decodeURIComponent(pathName);
+    }
+  } catch (e) {
+    console.log('[ServiceWorker] HEAD 文件名解析失败:', (e && e.message) || e);
+  }
+  return null;
+}
+
+/**
  * 从 fetch 响应文本中提取 URL，对结果去重
  * @param {string} content - 响应文本
  * @param {string} sourceUrl - 用于解析相对路径的基准 URL
@@ -1443,7 +1481,9 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
     }
     // 过滤掉明显不是文件名的值（纯查询参数等）
     if (!fileName || fileName.indexOf('=') !== -1 || fileName.length > 200) {
-      fileName = '未知文件';
+      // 回退：HEAD 请求 Content-Disposition 头解析文件名（替代已移除的 ResourceResolver）
+      const resolved = await resolveFilenameFromHeaders(downloadItem.url || '');
+      fileName = resolved || '未知文件';
     }
     // URL解码中文文件名（浏览器把中文encode到URL path里）
     try {
