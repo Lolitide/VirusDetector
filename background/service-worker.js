@@ -527,7 +527,23 @@ function injectBlockerFunc(archiveUrls, detectNonArchive) {
     var lower = href.toLowerCase();
     for (var i = 0; i < ARCHIVE_EXTS.length; i++) {
       if (lower.endsWith(ARCHIVE_EXTS[i])) return true;
+      '立即安装', '一键安装', '安装包',
+    '立即下载', '免费下载', '高速下载', '安全下载',
+    '点击下载', '直接下载', '本地下载', '官方下载',
+    'Download Now', 'Free Download', 'Download Free',
+    'install', 'setup', 'get started'
+  ];
+
+  // ══════════════════════════════════════════════════════
+  // Part 2: 辅助函数
+  // ══════════════════════════════════════════════════════
+
+  function isArchiveUrl(href) {
+    var lower = href.toLowerCase();
+    for (var i = 0; i < ARCHIVE_EXTS.length; i++) {
+      if (lower.endsWith(ARCHIVE_EXTS[i])) return true;
     }
+    retur    }
     return false;
   }
 
@@ -1432,51 +1448,45 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
     }
 
     // 更新下载状态
-    // 安全提取文件名：优先用 downloadItem.filename，其次从 URL 路径提取，
-    // 再次 HEAD 请求 Content-Disposition 头，兜底为"未知文件"
-    let fileName = '';
-    if (downloadItem.filename) {
-      fileName = downloadItem.filename.split(/[\\/]/).pop() || '';
-    }
-    if (!fileName) {
+    // 三级回退：downloadItem.filename → URL pathname → HEAD Content-Disposition
+    const rawName = downloadItem.filename || downloadItem.url || '';
+    let fileName = rawName.split(/[\\/]/).pop() || '';
+    // 回退：从下载URL中提取文件名
+    if (!fileName || fileName === rawName) {
       try {
-        fileName = (new URL(downloadItem.url || '').pathname.split('/').pop() || '').split('?')[0];
-      } catch (e) { /* URL 解析失败，保持空字符串 */ }
+        const urlPath = new URL(downloadItem.url || '').pathname;
+        fileName = urlPath.split('/').pop() || '';
+      } catch (e) {}
     }
-    // 回退3：URL 没给文件名时，HEAD 请求拿 Content-Disposition
-    if (!fileName || fileName.indexOf('=') !== -1) {
+    // 过滤掉明显不是文件名的值（纯查询参数等）
+    if (!fileName || fileName.indexOf('=') !== -1 || fileName.length > 200) {
+      fileName = '';
+    }
+    // 回退3：URL 没给文件名时 HEAD 拿 Content-Disposition + 重定向跟踪
+    if (!fileName) {
       try {
         const resp = await fetch(downloadItem.url || '', { method: 'HEAD' });
         const cd = resp.headers.get('Content-Disposition');
         if (cd) {
-          // 优先 RFC 5987: filename*=UTF-8''...
           const rfcMatch = cd.match(/filename\*=UTF-8''([^;]+)/i);
           if (rfcMatch) {
             try { fileName = decodeURIComponent(rfcMatch[1].trim()); } catch (e) {}
           }
-          // 其次标准 filename="..."
           if (!fileName) {
-            const stdMatch = cd.match(/filename="([^"]+)"/i) || cd.match(/filename=([^;]+)/i);
-            if (stdMatch) fileName = stdMatch[1].trim().replace(/^["']|["']$/g, '');
+            const std = cd.match(/filename="([^"]+)"/i) || cd.match(/filename=([^;]+)/i);
+            if (std) fileName = std[1].trim().replace(/^["']|["']$/g, '');
           }
         }
-        // 兜底：从重定向后的最终 URL pathname 提取
         if (!fileName) {
-          const finalPath = new URL(resp.url).pathname;
-          const pathName = finalPath.split('/').pop();
-          if (pathName && pathName.indexOf('=') === -1 && pathName.length <= 200) {
-            fileName = decodeURIComponent(pathName);
-          }
+          fileName = new URL(resp.url).pathname.split('/').pop();
         }
-      } catch (e) { /* HEAD 失败，保持空字符串 */ }
+      } catch (e) {}
     }
-    // URL解码中文文件名（浏览器可能encode）
-    if (fileName && fileName !== '未知文件') {
-      try { fileName = decodeURIComponent(fileName); } catch (e) {}
-    }
-    if (!fileName) {
-      fileName = '未知文件';
-    }
+    if (!fileName) fileName = '未知文件';
+    // URL解码中文文件名（浏览器把中文encode到URL path里）
+    try {
+      fileName = decodeURIComponent(fileName);
+    } catch (e) { /* 解码失败保持原样 */ }
     tabState.downloadState = {
       hasDownloadedArchive: true,
       archiveFileName: fileName,
