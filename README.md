@@ -3,21 +3,21 @@
 > Chrome/Edge 浏览器扩展，实时检测银狐木马（Silver Fox Trojan）钓鱼与仿冒网站。
 
 [![Manifest](https://img.shields.io/badge/Manifest-V3-blue)](https://developer.chrome.com/docs/extensions/mv3/)
-[![Version](https://img.shields.io/badge/Version-2.4.0-alpha.1-orange)](https://github.com)
+[![Version](https://img.shields.io/badge/Version-2.5.0-orange)](https://github.com)
 
 ---
 
 ## 功能简介
 
-通过 8 项检测对访问的网站进行实时安全评估。当总分达到 100 分阈值时，自动触发红色警告、桌面通知、下载拦截和警告弹窗。
+通过 8 项检测与下载域名黑名单加成对访问的网站进行实时安全评估。当总分达到 100 分阈值时，自动触发红色警告、桌面通知、下载拦截和警告弹窗。
 
 | 规则 | 最高加分 | 检测内容 |
 | ---- | -------- | -------- |
-| 域名仿冒 | **60** | 4 层递进匹配（精确段匹配、连字符连接段匹配、边界包含、关键词堆叠） |
+| 域名仿冒 | **60** | 4 类匹配策略 + 去连字符二次检测（精确段匹配、子串包含、关键词堆叠、约束编辑距离） |
 | 压缩包下载 | **40** | 两阶段检测：Phase A 主动扫描页面跨域压缩包链接（上限 30 分）+ Phase B 实际下载拦截（上限 40 分） |
 | ICP 备案缺失 | **50** | 对所有网站检测 ICP 备案号（含 beian.gov.cn 等政府链接提取） |
 | 链接分析 | **70** | Part A（同页链接/死链/重复链接）+ Part B（下载按钮/压缩包链接） |
-| 代码工程化 | **60** | 三信号组合判定（DOM复杂度+框架检测+外部资源），2信号+20，3信号+30；推广页Emoji密度检测最高+30 |
+| 代码工程化 | **60** | 结构信号组合判定（DOM复杂度+框架检测+外部资源+异常JS引用），2信号+20，≥3信号+30；推广页Emoji密度检测最高+30 |
 | 域名年龄评分 | **60** | 基于 RDAP 协议（RFC 9083）的 S 型衰减函数计分，新注册域名更可疑 |
 | 域名年龄减分 | **-20** | 注册时间长的域名可抵消部分可疑分数（条件：当前分数 ≥ 20） |
 | 下载链接跨域 | **30** | 跨域下载 +10，下载域名命中黑名单 +20，新注册域名额外 +10 |
@@ -68,15 +68,30 @@ VirusDetector/
 ├── background/
 │   ├── service-worker.js              # 主协调器 —— 导航监听、下载拦截、消息路由、弹窗调度
 │   ├── scoring-engine.js              # 多规则评分引擎 —— 综合评估与风险定级
-│   ├── domain-database.js             # 172 品牌域名数据库 + 4 层仿冒检测
+│   ├── domain-database.js             # 119 品牌域名数据库 + 仿冒检测 + 去连字符二次检测
 │   ├── download-blacklist.js          # 下载域名黑名单 —— 跨站免疫、90 天自动清理
 │   ├── rdap-client.js                 # RDAP 注册信息查询客户端
 │   ├── whois-client.js                # 统一域名查询入口（RDAP 主 + WhoisCX 回退）
 │   ├── cache-manager.js               # chrome.storage.local 缓存管理（24h TTL）
-│   ├── similarity.js                  # SimHash 64 位文本相似度 + 海明距离
-│   └── icp-utils.js                   # ICP 备案号正则匹配（覆盖 34 个省级行政区简称）
+│   ├── similarity.js                  # 预留文本相似度工具（当前未接入评分链路）
+│   ├── icp-utils.js                   # ICP 备案号正则匹配（覆盖 34 个省级行政区简称）
+│   └── resource-resolver/
+│       ├── index.js                   # Resource Resolver 主调度器 —— BFS 资源树遍历
+│       ├── config.js                  # 解析器配置常量（深度/数量/超时/大小限制）
+│       ├── resource-graph.js          # ResourceGraph / ResourceNode 数据结构
+│       └── resolvers/
+│           ├── base-resolver.js       # 解析器基类（可插拔接口）
+│           ├── html-resolver.js       # HTML 源码 URL 提取（11 种标签）
+│           ├── script-resolver.js     # Inline Script 静态分析（location/fetch/URL 模式）
+│           ├── meta-resolver.js       # Meta Refresh 跳转解析
+│           ├── txt-resolver.js        # TXT 内容递归解析（TXT→TXT→ZIP 链）
+│           ├── redirect-resolver.js   # HTTP 30x 重定向跟随
+│           ├── json-resolver.js       # JSON 内容 ZIP URL 提取
+│           ├── iframe-resolver.js     # iframe src 解析
+│           └── external-script-resolver.js  # 外部 JS 解析（预留，默认关闭）
 ├── content/
-│   └── content-script.js              # 内容脚本 —— 链接采集、ICP 扫描、页面度量采集
+│   ├── navigation-guard.js            # L0 导航守卫 —— document_start 拦截 JS 自动下载
+│   └── content-script.js              # 内容脚本 —— 链接采集、ICP 扫描、资源数据采集
 ├── popup/
 │   ├── popup.html                     # 工具栏弹窗 UI
 │   ├── popup.css                      # 弹窗样式（深色主题、SVG 图标系统）
@@ -88,10 +103,6 @@ VirusDetector/
 │   ├── download-confirm.html          # 下载二次确认窗口 UI
 │   ├── download-confirm.css           # 下载确认窗口样式
 │   └── download-confirm.js            # 下载确认控制 —— 三选项用户决策
-├── test/
-│   ├── test-phishing.html             # 测试页面 —— 触发各项检测规则
-│   ├── test-download.zip              # 最小合法 zip 文件（22 字节）
-│   └── create-test-zip.py             # 测试工具 —— 生成 zip + 双端口服务器
 └── utils/
     ├── constants.js                   # 评分常量、阈值配置、黑名单参数
     ├── url-utils.js                   # 域名解析、PSL 主域提取、DoH DNS 查询
@@ -103,8 +114,10 @@ VirusDetector/
 
 - **零依赖**：纯原生 JavaScript（ES Modules），无需 Node.js 构建
 - **Manifest V3**：使用 Service Worker 事件驱动架构
-- **通信模型**：Background (Service Worker) ↔ Content Script ↔ Popup 三方消息传递
-- **算法**：SimHash 64 位用于文本相似度检测；域名仿冒使用 4 层递进匹配（不含编辑距离）
+- **三层递进拦截**：L0 导航守卫（document_start）→ L1 资源解析器（Resource Resolver）→ L2 页面注入拦截（injectBlocker）→ L3 浏览器下载 API 兜底
+- **通信模型**：Background (Service Worker) ↔ Content Script ↔ Popup / Warning 页面消息传递
+- **算法**：域名仿冒使用精确段匹配、子串包含、关键词堆叠、约束编辑距离；Resource Resolver 使用 BFS 资源树遍历 + 解析器注册表模式
+- **抗绕过**：对抗 IDM 等下载器绕过（页面级 click / location / createElement hook），拦截 JS 程式化下载
 
 ---
 
@@ -114,16 +127,17 @@ VirusDetector/
 
 #### 1. 域名仿冒检测（规则一 | 60 分）
 
-采用 4 层递进式匹配，任一层命中即判定为仿冒：
+采用 4 类匹配策略，并对含 `-` / `_` 的域名执行去连字符二次检测；任一策略命中即判定为仿冒：
 
 ```text
 规则 A   精确段匹配     → deepseek-go.com 拆分为 [deepseek, go, com] → "deepseek" 精确命中
-规则 A-2 连字符连接匹配  → team-viewer.us 去除连字符 → "teamviewer" 命中品牌关键词
-规则 B   边界包含        → pc-huorong.com.cn 包含 huorong → 命中（关键词 ≥ 4 字符）
-规则 C   关键词堆叠      → google-google-cn-google.hl.cn → "google" 在段中出现 ≥ 3 次
+规则 B   标签子串包含   → pc-huorong.com.cn 的标签包含 "huorong" → 命中（关键词 ≥ 5 字符）
+规则 C   关键词堆叠     → google-google-cn-google.hl.cn → "google" 在段中出现 ≥ 3 次
+规则 D   约束编辑距离   → firefpx.com 与 "firefox" 距离 ≤ 2 且长度差 ≤ 2 → 命中
+二次检测 去连字符重试   → team-viewer.us 去除连字符后按 A/B/C 重试
 ```
 
-域名数据库覆盖 **172 个**品牌，包含 20 个类别：安全软件、浏览器、即时通讯、输入法、办公、视频、音乐、云存储、AI Chat、下载工具、压缩工具、电商、地图出行、支付、开发者工具、系统工具、游戏平台、游戏加速器、新闻资讯、政务服务、教育/高校。
+域名数据库覆盖 **119 个**品牌，包含 19 个实际使用类别：安全软件、浏览器、即时通讯、输入法、办公、视频、音乐、云存储、AI Chat、下载工具、压缩工具、电商、地图出行、支付、开发者工具、系统工具、游戏平台、游戏加速器、新闻资讯。
 
 #### 2. 压缩包下载检测（规则二 | 最高 40 分）
 
@@ -183,9 +197,9 @@ Content Script 扫描页面上所有 `<a>` 标签，识别指向压缩包文件�
 
 对所有网站进行 ICP 备案号检测，使用正则匹配覆盖中国全部 34 个省级行政区简称：
 
-- 完整的 ICP 备案号格式：`{省份}ICP{备|证}{6-8位数字}号`
+- 完整的 ICP 备案号格式：`{省份}ICP{备|证}{6-12位数字}号`
 - 同时识别公安备案号：`{省份}公网安备{10+位数字}号`
-- Content Script 通过 6 层扫描获取页面中所有可能包含备案号的文本：footer 元素、ICP/beian 命名元素、底部 30% 区域、所有 `<a>` 链接（含 beian.gov.cn / beian.miit.gov.cn 等政府备案链接）、position:fixed 底部固定栏、TreeWalker 全文本节点遍历（上限 50000 节点）
+- Content Script 通过 6 层扫描获取页面中所有可能包含备案号的文本：footer 元素、ICP/beian 命名元素、底部 30% 区域、所有 `<a>` 链接（含 beian.gov.cn / beian.miit.gov.cn 等政府备案链接）、position:fixed 底部固定栏、TreeWalker 全文本节点遍历（上限 15000 节点）
 
 #### 4. 链接分析（规则四 | 最高 70 分）
 
@@ -193,8 +207,8 @@ Part A（先执行，可叠加）：
 
 | 子规则 | 触发条件 | 加分 |
 | ------ | -------- | ---- |
-| A-1 同页链接 | >= 3 个链接指向当前页（完整 URL 完全一致） | +20 |
-| A-2 死链 | >= 1 个指向不存在子页面的链接（HEAD 请求验证） | +20 |
+| A-1 同页链接 | >= 5 个链接指向当前页（完整 URL 完全一致） | +20 |
+| A-2 死链 | >= 1 个指向不存在子页面的链接（HEAD 请求验证；自动二次扫描跳过） | +20 |
 | A-3 重复链接 | >= 4 个不同元素指向同一个链接 | +20 |
 | A-3 附加 | 该重复链接为下载链接（含 download/down 等关键词） | +10 |
 
@@ -209,23 +223,24 @@ Part B（仅当 Part A 为 0 时执行）：
 
 包含两个独立子规则，分数可叠加：
 
-##### 子规则 A：三信号组合判定
+##### 子规则 A：结构信号组合判定
 
 前提：页面文本 > 500 字符（排除空白/占位页面）。
 
 - **信号1** — DOM节点数 < 100（页面结构过于简单，不受HTML格式化影响）
-- **信号2** — 无主流框架痕迹（HTML标记 + window全局变量双重检测）
+- **信号2** — 无主流框架痕迹（优先基于资源 URL、DOM 特征和 HTML 标记检测，不依赖 `window.*` 全局变量）
 - **信号3** — 外部资源去重总数 < 5（脚本+样式+图片+字体+媒体，不含同源资源）
+- **信号4** — 异常 JS 引用模式（模板化语言包、通用脚本路径等克隆式资源布局）
 
-组合判定：3/3 = +30（高度可疑），2/3 = +20（中度可疑），0-1 = 0。
+组合判定：≥3 个结构信号 = +30（高度可疑），2 个结构信号 = +20（中度可疑），0-1 = 0。
 
 ##### 子规则 B：关键词预筛选 + Emoji 密度检测（最高 +30 分）
 
 先通过推广/产品关键词（"下载""产品""软件""download""product""software"等 49 个中英文关键词）预筛选确认页面是否为推广性质，再计算 Emoji 密度并通过分段线性映射加分：
 
-- pageText 长度 < 100 字符 → 跳过（0 分）
+- 文本长度 < 100 字符 → 跳过（0 分）
 - 关键词匹配数 < 阈值（默认 1） → 跳过（0 分，非推广页面）
-- 计算密度：`density = (emojiCount / pageText.length) × 1000`（个/千字符）
+- 计算密度：`density = (emojiCount / textLength) × 1000`（个/千字符）。该计算在 Content Script 本地完成，后台只接收计数和密度等派生指标，不接收页面正文。
 - 分段映射：density < 2.0 → 0；2.0 ≤ density < 10.0 → `(density - 2) / 8 × 30`；density ≥ 10.0 → 30（封顶）
 - Emoji 匹配使用 Unicode 属性转义正则 `/\p{Emoji_Presentation}|\p{Emoji}️/gu`，覆盖肤色修饰符与零宽连接符序列
 
@@ -294,6 +309,54 @@ score = floor(60 / (1 + (x / (60 × b))^a))
 
 > **与用户白名单的区别**：用户白名单（弹窗中操作）完全跳过所有 8 项检测规则；可信平台白名单仅跳过规则一（域名仿冒），是一个内置的、面向 UGC 平台的误报抑制机制。
 
+### Resource Resolver — 统一资源解析层
+
+将资源解析与评分彻底解耦的新架构层。Resource Resolver 负责递归解析页面资源树（HTML → TXT → TXT → ZIP 等多级链），输出结构化的 `ResourceGraph`；Rule2（压缩包下载检测）仅消费 Graph 数据进行评分，不承担任何资源解析职责。
+
+**核心能力**：
+
+| 解析器 | 触发条件 | 能力 | 网络请求 |
+|--------|---------|------|:---:|
+| HtmlResolver | 页面 HTML | 提取 11 种 HTML 标签的 URL（a/link/script/img/iframe/form/source/video/audio/object/embed），相对路径自动转换 | — |
+| ScriptResolver | Inline Script | 静态分析 `location.href`、`window.open`、`fetch`、`axios`、`new URL` 等模式，提取 ZIP/EXE 字符串 | — |
+| MetaRefreshResolver | `<meta http-equiv="refresh">` | 解析 `content="5;url=..."` 跳转目标 | — |
+| TxtResolver | `.txt` 文件 | Fetch 内容 → 正则提取归档 URL → 支持 TXT→TXT 递归（最多 3 层） | ✓ |
+| RedirectResolver | HTTP 30x | HEAD 请求跟随重定向，记录完整跳转链 `{from → to, statusCode}` | ✓ |
+| JsonResolver | `.json` 文件 | Fetch JSON → 递归遍历值 → 提取归档 URL | ✓ |
+| IframeResolver | `<iframe src>` | 标记 iframe 源 URL | — |
+| ExternalScriptResolver | 外部 `.js` | （第二阶段预留，默认关闭）Fetch 外部 JS → 提取 URL 模式 | ✓ |
+
+**安全限制**：最大递归深度 3 层、最多处理 20 个资源、TXT 限制 256KB、单资源超时 2s、总超时 5s。任何失败返回中性结果，不阻塞检测流程。
+
+**中间页抓取**（可选，默认关闭）：对于指向 HTML 页面且带下载关键词（「立即下载」「百度网盘」等）的链接，主动 Fetch 该中间页 HTML 内容，提取其中隐藏的 ZIP/RAR/7Z 等归档 URL，实现 **页面 A → 下载页 B → ZIP** 的完整发现链。
+
+### 三层递进下载拦截
+
+针对 IDM 等下载器绕过 `chrome.downloads.onCreated` 的问题，采用从早到晚、从页面到浏览器的分层防御：
+
+```
+Timeline:  document_start       page load        content script reports      user clicks
+              │                    │                    │                         │
+              ▼                    ▼                    ▼                         ▼
+         ┌─────────┐     ┌─────────────────┐    ┌──────────────────┐    ┌──────────────────┐
+         │ Layer 0 │     │    Layer 1      │    │    Layer 2       │    │    Layer 3       │
+         │ NavGuard│────▶│ ResourceResolver│───▶│ injectBlocker   │───▶│ downloads API    │
+         │ (新)    │     │ + ScoringEngine │    │ (增强)           │    │ (现有,兜底)      │
+         └─────────┘     └─────────────────┘    └──────────────────┘    └──────────────────┘
+```
+
+| 层级 | 名称 | 时机 | 职责 |
+|:---:|------|------|------|
+| **L0** | Navigation Guard | `document_start`，先于页面 JS | Hook `window.location` setter + `window.open`，拦截 JS 自动跳转/下载到危险文件 |
+| **L1** | Resource Resolver + Phase A | Content Script 上报后（~600ms） | 构建 ResourceGraph，发现 TXT→ZIP 链和中间下载页 |
+| **L2** | injectBlockerFunc | 评分 ≥50 注入 lightweight，≥80 注入完整版 | Hook `a.click()` + `document.createElement`，拦截页面级下载点击；≥80 增加视觉禁用 + MutationObserver |
+| **L3** | chrome.downloads.onCreated | 浏览器下载事件触发时 | 取消下载 + 弹窗确认（IDM 接管时此层失效，由 L0/L2 兜底） |
+
+**分层注入阈值**：
+- 评分 ≥50 → 注入 lightweight 拦截器（仅 JS hooks + click 拦截，无视觉禁用）
+- 评分 ≥80 → 注入完整拦截器（视觉禁用下载按钮 + MutationObserver + 下载确认弹窗）
+- 评分 ≥100 → 完整拦截器 + 红色警告弹窗 + 桌面通知 + 红色图标
+
 ### 评分体系
 
 ```text
@@ -339,19 +402,21 @@ score = floor(60 / (1 + (x / (60 × b))^a))
 
 #### 消息通信
 
-15 种消息类型覆盖 Background ↔ Content Script ↔ Popup ↔ Warning 四方通信：
+当前实际路由覆盖 10 种主要消息类型，连接 Background ↔ Content Script ↔ Popup ↔ Warning：
 
 | 消息类型 | 方向 | 用途 |
 | -------- | ---- | ---- |
 | `PAGE_ANALYSIS_RESULT` | Content → Background | 页面分析数据上报 |
-| `REQUEST_PAGE_TEXT` | Background → Content | 请求重新采集页面数据 |
+| `REQUEST_PAGE_TEXT` | Background → Content | 请求重新采集页面派生指标（不返回正文） |
 | `GET_TAB_STATE` | Popup → Background | 查询当前标签页状态 |
+| `GET_OFFICIAL_LINK` | 扩展页 → Background | 查询内置品牌库中的官方链接 |
+| `CLEAR_TAB_STATE` | 扩展页（预留） → Background | 清除当前标签页检测状态 |
 | `ADD_TO_WHITELIST` | Popup → Background | 添加域名到白名单 |
 | `REMOVE_FROM_WHITELIST` | Popup → Background | 从白名单移除域名 |
 | `CHECK_WHITELIST` | Popup → Background | 查询域名是否在白名单 |
 | `DOWNLOAD_CONFIRMATION` | Warning → Background | 下载确认弹窗用户选择 |
-| `GET_DOWNLOAD_BLACKLIST` | Popup → Background | 查询下载域名黑名单 |
-| `REMOVE_DOWNLOAD_BLACKLIST` | Popup → Background | 移除下载黑名单条目 |
+| `GET_DOWNLOAD_BLACKLIST` | 管理界面（预留） → Background | 查询下载域名黑名单 |
+| `REMOVE_DOWNLOAD_BLACKLIST` | 管理界面（预留） → Background | 移除下载黑名单条目 |
 
 ---
 
@@ -363,10 +428,10 @@ score = floor(60 / (1 + (x / (60 × b))^a))
 | `storage` | 持久化评分状态、白名单、缓存 |
 | `downloads` | 监听下载事件、取消危险下载 |
 | `scripting` | 注入 Content Script 与下载拦截脚本 |
-| `alarms` | 定时任务支持 |
+| `alarms` | Manifest 中保留的定时任务权限；当前代码未调用 `chrome.alarms` |
 | `notifications` | 桌面风险通知 |
 | `webNavigation` | 监听页面导航以触发分析 |
-| `<all_urls>` | 全部网站覆盖（检测与注入所需） |
+| `http://*/*`, `https://*/*` | 仅覆盖 HTTP/HTTPS 网站，避免在 `file://`、`data:`、`ftp:`、浏览器内部页面等非网页协议上运行 |
 
 ---
 

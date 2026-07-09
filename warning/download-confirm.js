@@ -1,5 +1,5 @@
 /**
- * 银狐木马检测 - 下载风险确认窗口控制器 (v2.4.0-alpha.1)
+ * 银狐木马检测 - 下载风险确认窗口控制器
  *
  * 职责：
  *   - 从 URL 参数读取下载信息和检测结果并渲染界面
@@ -74,6 +74,21 @@
           filename: filename
         }
       });
+
+      // 同步上报用户决策
+      if (action === 'trust_site') {
+        // 信任网站 = 用户认为这是误报
+        chrome.runtime.sendMessage({
+          type: 'SUBMIT_REPORT',
+          payload: { reportType: 'false_positive', domain, note: '下载确认中信任网站' }
+        }).catch(() => {});
+      } else if (action === 'block_blacklist') {
+        // 拉黑下载域名 = 用户确认威胁
+        chrome.runtime.sendMessage({
+          type: 'SUBMIT_REPORT',
+          payload: { reportType: 'confirmed_phish', domain, note: '下载确认中拉黑下载域名: ' + downloadDomain }
+        }).catch(() => {});
+      }
     } catch (e) {
       console.error('[DownloadConfirm] 发送确认消息失败:', e);
     }

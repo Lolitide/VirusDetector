@@ -66,3 +66,10 @@ body {
 .btn-secondary:hover { opacity: 0.85; }
 .btn-primary { background: #1565C0; color: #fff; }
 .btn-primary:hover { opacity: 0.9; }
+
+.report-actions { padding: 8px 24px 0; text-align: center; }
+.btn-report { background: transparent; border: 1px dashed #757575; color: #9e9e9e;
+  padding: 8px 16px; border-radius: 5px; font-size: 12px; cursor: pointer;
+  transition: all .15s; width: 100%; }
+.btn-report:hover { border-color: #FF9800; color: #FF9800; background: rgba(255,152,0,.08); }
+.btn-report:disabled { opacity: 0.6; cursor: not-allowed; }

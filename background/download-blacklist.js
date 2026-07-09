@@ -6,7 +6,6 @@
  * 此后任何其他网站若有链接指向同一下载域名，都会自动增加风险评分。
  *
  * @module download-blacklist
- * @version 2.4.0-alpha.1
  *
  * 数据结构 (chrome.storage.local key: "download_blacklist"):
  *   {

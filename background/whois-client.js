@@ -5,7 +5,6 @@
  * RDAP 基于 RFC 9082/9083 协议，WhoisCX 作为全球覆盖的备用查询。
  *
  * @module whois-client
- * @version 2.4.0-alpha.1
  *
  * 查询链路：
  *   WhoisClient.lookup(domain)
@@ -30,7 +29,8 @@
  */
 
 import {
-  WHOIS_API_URL, WHOIS_CACHE_TTL, WHOIS_API_TIMEOUT
+  WHOIS_API_URL, WHOIS_CACHE_TTL, WHOIS_API_TIMEOUT,
+  VERSION
 } from '../utils/constants.js';
 import { RdapClient } from './rdap-client.js';
 import { refreshPublicSuffixDNS } from '../utils/url-utils.js';
@@ -53,7 +53,17 @@ const _cache = new Map();
 let _lastWhoisRequestTime = 0;
 
 /** WhoisCX API 最小请求间隔（毫秒），保护免费 API 不被封禁 */
-const MIN_WHOIS_INTERVAL = 2100; // 略大于 2 秒
+const MIN_WHOIS_INTERVAL_DEFAULT = 2100;
+
+/** 从用户设置读取速率限制间隔，回退到默认值 */
+async function _getWhoisInterval() {
+  try {
+    const r = await chrome.storage.local.get('global_settings');
+    const gs = r.global_settings || {};
+    if (gs.whois_apiIntervalMs && gs.whois_apiIntervalMs >= 1000) return gs.whois_apiIntervalMs;
+  } catch (e) { /* ignore */ }
+  return MIN_WHOIS_INTERVAL_DEFAULT;
+}
 
 /**
  * 等待直到满足 WhoisCX 速率限制要求
@@ -62,8 +72,9 @@ const MIN_WHOIS_INTERVAL = 2100; // 略大于 2 秒
 async function _waitForWhoisRateLimit() {
   const now = Date.now();
   const elapsed = now - _lastWhoisRequestTime;
-  if (elapsed < MIN_WHOIS_INTERVAL) {
-    await new Promise(resolve => setTimeout(resolve, MIN_WHOIS_INTERVAL - elapsed));
+  const interval = await _getWhoisInterval();
+  if (elapsed < interval) {
+    await new Promise(resolve => setTimeout(resolve, interval - elapsed));
   }
   _lastWhoisRequestTime = Date.now();
 }
@@ -221,7 +232,7 @@ async function _lookupViaWhoisCx(normalizedDomain) {
       signal: controller.signal,
       headers: {
         'Accept': '*/*',
-        'User-Agent': 'VirusDetector/2.4.0-alpha.1 (Browser Extension; RDAP+WhoisCX)'
+        'User-Agent': `VirusDetector/${VERSION} (Browser Extension; RDAP+WhoisCX)`
       }
     });
 

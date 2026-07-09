@@ -5,8 +5,11 @@
  * 存储键名和缓存策略。所有模块通过 import 共用同一份配置。
  *
  * @module constants
- * @version 2.4.0-alpha.1
  */
+
+// ==================== 版本号（统一入口） ====================
+/** 当前扩展版本号，所有模块引用此常量，发版时仅需修改此处 + manifest.json + README */
+export const VERSION = '2.5.0';
 
 // ==================== 评分体系 ====================
 /** 触发警告的总分阈值（注入拦截 + 警告窗口 + 图标变红） */
@@ -47,6 +50,12 @@ export const SCORE_RULE_2_PER_HIGH_RISK = 10;
 /** 单个中危压缩包链接（跨域+无下载关键词）基础得分 */
 export const SCORE_RULE_2_PER_LOW_RISK = 5;
 
+/** 单个可信平台压缩包链接（跨域+指向GitHub等知名平台）降权得分 */
+export const SCORE_RULE_2_TRUSTED_PLATFORM = 3;
+
+/** 官网下载链接劫持检测：仿冒站上的下载链接指向非官方域名，额外加分 */
+export const SCORE_RULE_2_HIJACK = 30;
+
 /** 批量分发阈值：压缩包链接数 >= 此值时触发批量加权 */
 export const SCORE_RULE_2_BATCH_THRESHOLD = 3;
 
@@ -71,10 +80,13 @@ export const ARCHIVE_EXTENSIONS = [
 
 // ==================== 规则四：链接分析 ====================
 // 链接指向当前页的判断阈值
-export const SAME_PAGE_LINK_THRESHOLD = 5;    // ≥5个同页链接 → 触发①
+export const SAME_PAGE_LINK_THRESHOLD = 8;    // ≥8个同页链接 → 触发①（排除导航区域后）
 
 // 重复链接检测阈值（规则四A-③）
 export const DUPLICATE_LINK_THRESHOLD = 4;    // ≥4个不同元素指向同一个链接 → 触发③
+
+// 死链最小数量（规则四A-②）
+export const DEAD_LINK_THRESHOLD = 3;    // ≥3条死链 → 触发②
 
 // 下载链接检测关键词（规则四A-③附加分）
 export const DOWNLOAD_LINK_KEYWORDS = [
@@ -125,7 +137,7 @@ export const AI_PAGE_THRESHOLDS = {
  *   - 关键词预筛避免对非推广页面的误报
  */
 /** 推广/产品页面关键词（中英文），用于预筛选 */
-export const EMOJI_PROMO_KEYWORDS = [
+export const PROMO_KEYWORDS = [
   // 中文关键词
   '下载', '产品', '软件', '安装', '免费', '官方', '应用', '工具',
   '版本', '最新', '破解', '注册', '激活', '绿色', '汉化', '插件',
@@ -179,7 +191,13 @@ export const MSG_TYPES = {
   CHECK_WHITELIST: 'CHECK_WHITELIST',
   DOWNLOAD_CONFIRMATION: 'DOWNLOAD_CONFIRMATION',
   GET_DOWNLOAD_BLACKLIST: 'GET_DOWNLOAD_BLACKLIST',
-  REMOVE_DOWNLOAD_BLACKLIST: 'REMOVE_DOWNLOAD_BLACKLIST'
+  REMOVE_DOWNLOAD_BLACKLIST: 'REMOVE_DOWNLOAD_BLACKLIST',
+  SUBMIT_REPORT: 'SUBMIT_REPORT',
+  SETTINGS_UPDATED: 'SETTINGS_UPDATED',
+  GET_SETTINGS: 'GET_SETTINGS',
+  UPDATE_SETTINGS: 'UPDATE_SETTINGS',
+  BULK_UPDATE_WHITELIST: 'BULK_UPDATE_WHITELIST',
+  CHECK_UPDATE: 'CHECK_UPDATE'
 };
 
 // ==================== 存储键 ====================
@@ -190,11 +208,24 @@ export const STORAGE_KEYS = {
   GLOBAL_SETTINGS: 'global_settings',
   WHITELIST: 'whitelist',
   DOWNLOAD_BLACKLIST: 'download_blacklist',
-  PENDING_DOWNLOADS: 'pending_downloads'
+  PENDING_DOWNLOADS: 'pending_downloads',
+  USER_REPORTS: 'user_reports',
+  UPDATE_INFO: 'update_info'
 };
 
 // 缓存有效期（毫秒）
 export const CACHE_TTL = 24 * 60 * 60 * 1000;  // 24小时
+
+// ==================== 用户上报 → GitHub Issue ====================
+/** Cloudflare Worker 上报代理 URL（部署后替换为实际 URL） */
+export const REPORT_API_URL = 'https://virus-detector-report.lolitide.workers.dev/api/report';
+
+// ==================== 更新检测 ====================
+/** GitHub Releases API（获取最新版本） */
+export const GITHUB_RELEASES_API_URL = 'https://api.github.com/repos/Lolitide/VirusDetector/releases/latest';
+
+/** GitHub Releases 页面（用户手动下载） */
+export const GITHUB_RELEASES_PAGE = 'https://github.com/Lolitide/VirusDetector/releases';
 
 // ==================== RDAP / Whois API 配置 ====================
 /** RDAP IANA 引导文件 URL（TLD → RDAP 服务器映射） */
@@ -224,10 +255,10 @@ export const RDAP_REQUEST_TIMEOUT = 10000;
 export const SCORE_DOMAIN_AGE_MAX = 60;          // 最大增加可疑分数
 
 /** 域名年龄衰减速率参数 a（越大衰减越快） */
-export const DOMAIN_AGE_DECAY_A = 2;
+export const DOMAIN_AGE_DECAY_A = 2.2;
 
 /** 域名年龄衰减零点参数 b（控制衰减中心位置，单位：60天） */
-export const DOMAIN_AGE_DECAY_B = 1;
+export const DOMAIN_AGE_DECAY_B = 1.9;
 
 // ==================== 下载链接跨域检测规则 ====================
 /** 下载链接与当前页面跨域（不同主域名）基础加分 */
@@ -255,6 +286,34 @@ export const DOWNLOAD_BLACKLIST_CLEANUP_DAYS = 90;
 /** 黑名单容量上限（条） */
 export const DOWNLOAD_BLACKLIST_MAX_ENTRIES = 500;
 
+// ==================== Resource Resolver 配置 ====================
+/**
+ * Resource Resolver 的运行时参数。
+ * 与 background/resource-resolver/config.js 保持同步。
+ */
+
+/** Resource Resolver 最大递归深度（0=页面本身，最多向下 N 层） */
+export const RESOLVER_MAX_DEPTH = 3;
+
+/** Resource Resolver 整个解析过程最多处理的资源数 */
+export const RESOLVER_MAX_TOTAL_RESOURCES = 20;
+
+/** TXT 文件最大下载大小（字节） */
+export const RESOLVER_MAX_TXT_SIZE = 256 * 1024; // 256KB
+
+/** 单个资源 fetch 超时（毫秒） */
+export const RESOLVER_PER_RESOURCE_TIMEOUT = 2000;
+
+/** Resource Resolver 总超时（毫秒） */
+export const RESOLVER_TOTAL_TIMEOUT = 5000;
+
+/** 可执行程序文件扩展名（受 detectNonArchiveFiles 开关控制） */
+export const EXECUTABLE_EXTENSIONS = [
+  '.exe', '.msi', '.apk', '.pkg', '.appx', '.deb', '.rpm',
+  '.bat', '.cmd', '.ps1', '.vbs', '.scr', '.jar',
+  '.bin', '.run', '.sh', '.dmg'
+];
+
 // ==================== 域名年龄减分规则 ====================
 /**
  * 基于当前页面域名注册天数（creation_days）的减分规则。
@@ -271,7 +330,7 @@ export const SCORE_DOMAIN_AGE_BONUS_MAX = 20;        // 最大减分分值
 export const DOMAIN_AGE_BONUS_SCORE_THRESHOLD = 20;
 
 /** 域名年龄减分起始天数：注册天数 < 此值不减分 */
-export const DOMAIN_AGE_BONUS_MIN_DAYS = 180;
+export const DOMAIN_AGE_BONUS_MIN_DAYS = 365;
 
 /** 域名年龄减分封顶天数：注册天数 ≥ 此值获得最大减分 */
 export const DOMAIN_AGE_BONUS_MAX_DAYS = 730;

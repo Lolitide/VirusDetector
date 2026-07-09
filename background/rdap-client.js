@@ -5,7 +5,6 @@
  * 替代原有的 WhoisCX API，使用 IANA RDAP 引导文件 + RDAP 服务端查询。
  *
  * @module rdap-client
- * @version 2.4.0-alpha.1
  *
  * 查询流程：
  *   1. 从 IANA 下载 RDAP 引导文件 https://data.iana.org/rdap/dns.json
@@ -49,7 +48,17 @@ const RDAP_PROXY_URL = 'https://rdap.ss/api/query?q=';
 const BOOTSTRAP_CACHE_TTL = 24 * 60 * 60 * 1000;
 
 /** RDAP 请求超时（毫秒） */
-const RDAP_REQUEST_TIMEOUT = 10000;
+const RDAP_REQUEST_TIMEOUT_DEFAULT = 10000;
+
+/** 从用户设置读取 API 超时，回退到默认值 */
+async function _getApiTimeout() {
+  try {
+    const r = await chrome.storage.local.get('global_settings');
+    const gs = r.global_settings || {};
+    if (gs.api_timeoutMs && gs.api_timeoutMs >= 1000) return gs.api_timeoutMs;
+  } catch (e) { /* ignore */ }
+  return RDAP_REQUEST_TIMEOUT_DEFAULT;
+}
 
 /**
  * @typedef {Object} BootstrapCache
@@ -111,7 +120,7 @@ async function _fetchBootstrap() {
   console.log('[RdapClient] 正在下载 RDAP 引导文件...');
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), RDAP_REQUEST_TIMEOUT);
+  const timeoutId = setTimeout(() => controller.abort(), await _getApiTimeout());
 
   let response;
   try {
@@ -715,7 +724,7 @@ export class RdapClient {
       // Step 3: 发送查询请求
       try {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), RDAP_REQUEST_TIMEOUT);
+        const timeoutId = setTimeout(() => controller.abort(), await _getApiTimeout());
 
         const resp = await fetch(queryUrl, {
           method: 'GET',
@@ -773,7 +782,7 @@ export class RdapClient {
       if (lastFetchError) {
         const error = lastFetchError;
         if (error.name === 'AbortError') {
-          _lastError = { domain: normalizedDomain, phase: 'timeout', message: `请求超时 (${RDAP_REQUEST_TIMEOUT}ms)` };
+          _lastError = { domain: normalizedDomain, phase: 'timeout', message: `请求超时 (${await _getApiTimeout()}ms)` };
         } else if (error.name === 'TypeError' && error.message.includes('fetch')) {
           _lastError = { domain: normalizedDomain, phase: 'connect', message: `网络连接失败: ${error.message}` };
         } else {

@@ -1,0 +1,72 @@
+name: "✨ 功能建议"
+description: 为这个项目提出一个新想法或改进建议
+title: "[Feature] "
+labels: ["enhancement"]
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢你的建议！请描述你想要的功能以及它的使用场景。
+
+  - type: dropdown
+    id: type
+    attributes:
+      label: 类型
+      description: 建议所属类别
+      options:
+        - 新功能（New Feature）
+        - 改进（Improvement）
+        - 用户体验（UX）
+        - 性能优化（Performance）
+      default: 0
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: 描述
+      description: 清晰描述你想添加的功能
+      placeholder: 请描述你想要的功能，包括：功能是什么、解决了什么问题。
+    validations:
+      required: true
+
+  - type: textarea
+    id: motivation
+    attributes:
+      label: 使用场景 / 动机
+      description: 为什么需要这个功能？在什么场景下会用到？
+      placeholder: 请描述使用场景，例如：在浏览/下载某些文件时，我需要……
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: 期望的解决方案
+      description: 描述你希望如何实现这个功能
+      placeholder: 请描述你期望的实现方式，例如：在哪个位置添加什么功能、交互流程是怎样的。
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 替代方案
+      description: 描述你考虑过的替代方案
+      placeholder: 请描述是否有其他替代方案可以考虑（可选）。
+    validations:
+      required: false
+
+  - type: textarea
+    id: related_files
+    attributes:
+      label: 相关代码文件
+      description: 如果知道涉及的文件，请列出（每行一个）
+      placeholder: |
+        请填写相关代码文件路径，如：
+        background/scoring-engine.js
+      render: shell
+    validations:
+      required: false

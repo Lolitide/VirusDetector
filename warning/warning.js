@@ -1,5 +1,5 @@
 /**
- * 银狐木马检测 - 警告窗口控制器 (v2.4.0-alpha.1)
+ * 银狐木马检测 - 警告窗口控制器
  *
  * 职责：
  * - 从 URL 参数读取检测结果并渲染警告界面
@@ -119,4 +119,26 @@
 
   // 关闭按钮也取消倒计时（事件已绑定，补充清理）
   document.getElementById('btn-close').addEventListener('click', clearAutoClose);
+
+  // ---- 误报上报 ----
+  const reportFalseBtn = document.getElementById('btn-report-false');
+  if (reportFalseBtn) {
+    reportFalseBtn.addEventListener('click', async () => {
+      reportFalseBtn.disabled = true;
+      reportFalseBtn.textContent = '上报中...';
+      try {
+        await chrome.runtime.sendMessage({
+          type: 'SUBMIT_REPORT',
+          payload: { reportType: 'false_positive', domain, note: '' }
+        });
+        reportFalseBtn.textContent = '✅ 已上报为误报，感谢反馈';
+        // 3秒后关闭
+        setTimeout(() => window.close(), 3000);
+      } catch (e) {
+        console.error('[Warning] 误报上报失败:', e);
+        reportFalseBtn.textContent = '上报失败，请重试';
+        reportFalseBtn.disabled = false;
+      }
+    });
+  }
 })();

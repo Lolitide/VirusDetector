@@ -5,13 +5,14 @@
  * 域名仿冒检测能力。
  *
  * @module domain-database
- * @version 2.4.0-alpha.1
  *
  * 数据规模：
- *   - 覆盖 20+ 个类别（安全软件、浏览器、即时通讯、输入法、办公、视频、
+ *   - 覆盖 20 个类别（安全软件、浏览器、即时通讯、输入法、办公、视频、
  *     音乐、云存储、AI Chat、下载工具、压缩工具、电商、地图出行、支付、
- *     开发者工具、系统工具、游戏平台、游戏加速器、新闻资讯、政务服务、高校教育）
- *   - 172 条品牌记录
+ *     开发者工具、系统工具、游戏平台、游戏加速器、新闻资讯、政务服务）
+ *
+ *   注：.edu.cn 教育机构域名由 CERNET 管理，攻击者无法注册，已在 _evaluateRule1 中前置跳过，不再纳入数据库。
+ *   - 120 条品牌记录
  *
  * 每条记录包含：
  *   - name             品牌名称
@@ -24,11 +25,14 @@
  *   - keywordToEntries：关键词 → 品牌记录列表 映射（O(1) 反查）
  *   - sortedKeywords：按长度降序排列（优先匹配长品牌词，避免短词吞掉长词）
  *
- * 仿冒检测策略（4 规则递进，命中即返回）：
- *   A.  精确段匹配    → 标签段完全等于品牌关键词（所有长度）
- *   A-2.连字匹配      → 标签去分隔符（-/_）后拼接结果等于关键词
- *   B.  边界包含      → 关键词在 label 中出现且位于分隔符边界（仅 kw ≥ 4 字符）
- *   C.  关键词堆叠    → 同一关键词在所有段中精确出现 ≥ 3 次
+ * 仿冒检测策略（5 规则递进 + 去连字符二次检测，命中即返回）：
+ *   A. 精确段匹配    → 标签段完全等于品牌关键词（所有长度）
+ *   B. 标签子串包含  → 关键词在任一 label 中出现（仅 kw ≥ 5，任意位置不要求边界）
+ *   C. 关键词堆叠    → 同一关键词在所有段中精确出现 ≥ 3 次（所有长度）
+ *   D. 约束编辑距离  → Levenshtein ≤ 2 且 lenDiff ≤ 2（仅 kw ≥ 6）
+ *
+ *   去连字符二次检测：若域名含 - 或 _，去除后重新跑 A/B/C 规则，
+ *   覆盖连字符插入 + 子串嵌入的复合变形（如 pay-pal-login.hl.cn）。
  */
 export const SOFTWARE_CATEGORIES = {
   SECURITY: '安全软件',
@@ -155,7 +159,7 @@ const DOMAIN_DATABASE = [
   },
   {
     name: '谷歌搜索',
-    officialDomains: ['google.com', 'google.cn', 'google.com.hk'],
+    officialDomains: ['google.com', 'google.cn', 'google.com.hk', 'googlemail.com', 'gmail.com'],
     correctUrl: 'https://www.google.com/',
     category: SOFTWARE_CATEGORIES.BROWSER,
     keywords: ['google', 'Google', '谷歌', 'guge'],
@@ -256,7 +260,7 @@ const DOMAIN_DATABASE = [
     officialDomains: ['pinyin.sogou.com', 'shurufa.sogou.com'],
     correctUrl: 'https://pinyin.sogou.com',
     category: SOFTWARE_CATEGORIES.INPUT_METHOD,
-    keywords: ['搜狗输入法', '搜狗拼音', 'sogou输入法', '搜狗拼音输入法', '搜狗'],
+    keywords: ['搜狗输入法', '搜狗拼音', 'sogou输入法', '搜狗拼音输入法', '搜狗', 'sogou'],
     isChineseBrand: true
   },
   {
@@ -285,7 +289,7 @@ const DOMAIN_DATABASE = [
   },
   {
     name: '手心输入法',
-    officialDomains: ['www.xinshuru.com'],
+    officialDomains: ['xinshuru.com'],
     correctUrl: 'https://www.xinshuru.com',
     category: SOFTWARE_CATEGORIES.INPUT_METHOD,
     keywords: ['手心输入法', '手心'],
@@ -305,7 +309,7 @@ const DOMAIN_DATABASE = [
     officialDomains: ['docs.qq.com'],
     correctUrl: 'https://docs.qq.com',
     category: SOFTWARE_CATEGORIES.OFFICE,
-    keywords: ['腾讯文档', 'docs.qq'],
+    keywords: ['腾讯文档'],
     isChineseBrand: true
   },
   {
@@ -330,7 +334,7 @@ const DOMAIN_DATABASE = [
     officialDomains: ['v.qq.com'],
     correctUrl: 'https://v.qq.com',
     category: SOFTWARE_CATEGORIES.VIDEO,
-    keywords: ['腾讯视频', 'qq视频', 'QQLive'],
+    keywords: ['腾讯视频', 'qq视频'],
     isChineseBrand: true
   },
   {
@@ -375,10 +379,10 @@ const DOMAIN_DATABASE = [
   },
   {
     name: '搜狐视频',
-    officialDomains: ['tv.sohu.com'],
+    officialDomains: ['tv.sohu.com', 'sohu.com'],
     correctUrl: 'https://tv.sohu.com',
     category: SOFTWARE_CATEGORIES.VIDEO,
-    keywords: ['搜狐视频', 'sohu视频'],
+    keywords: ['搜狐视频', 'sohu视频', '搜狐', 'sohu'],
     isChineseBrand: true
   },
 // ========== 音乐软件 ==========
@@ -400,7 +404,7 @@ const DOMAIN_DATABASE = [
   },
   {
     name: '酷狗音乐',
-    officialDomains: ['kugou.com', 'www.kugou.com'],
+    officialDomains: ['kugou.com'],
     correctUrl: 'https://www.kugou.com',
     category: SOFTWARE_CATEGORIES.MUSIC,
     keywords: ['酷狗', 'kugou', '酷狗音乐'],
@@ -408,7 +412,7 @@ const DOMAIN_DATABASE = [
   },
   {
     name: '酷我音乐',
-    officialDomains: ['kuwo.cn', 'www.kuwo.cn'],
+    officialDomains: ['kuwo.cn'],
     correctUrl: 'https://www.kuwo.cn',
     category: SOFTWARE_CATEGORIES.MUSIC,
     keywords: ['酷我', 'kuwo', '酷我音乐'],
@@ -436,7 +440,7 @@ const DOMAIN_DATABASE = [
     officialDomains: ['pan.baidu.com'],
     correctUrl: 'https://pan.baidu.com',
     category: SOFTWARE_CATEGORIES.CLOUD_STORAGE,
-    keywords: ['百度网盘', '百度云', '百度云盘', 'baidupan', 'baiduyun'],
+    keywords: ['百度网盘', '百度云盘', 'baidupan', 'baiduyun'],
     isChineseBrand: true
   },
   {
@@ -552,13 +556,21 @@ const DOMAIN_DATABASE = [
     keywords: ['智谱清言', 'chatglm', '智谱', 'GLM', '清言', 'bigmodel'],
     isChineseBrand: true
   },
+  {
+    name: 'ChatGPT',
+    officialDomains: ['openai.com', 'chatgpt.com', 'platform.openai.com'],
+    correctUrl: 'https://chatgpt.com',
+    category: SOFTWARE_CATEGORIES.AI_CHAT,
+    keywords: ['ChatGPT', 'chatgpt', 'OpenAI', 'openai'],
+    isChineseBrand: false
+  },
 // ========== 下载工具 ==========
   {
     name: '迅雷',
     officialDomains: ['xunlei.com', 'dl.xunlei.com', 'mobile.xunlei.com'],
     correctUrl: 'https://www.xunlei.com',
     category: SOFTWARE_CATEGORIES.DOWNLOAD_TOOL,
-    keywords: ['迅雷', 'xunlei', 'Thunder', '迅雷下载', 'Thunder Network'],
+    keywords: ['迅雷', 'xunlei', 'Thunder', '迅雷下载'],
     isChineseBrand: true
   },
   {
@@ -566,7 +578,7 @@ const DOMAIN_DATABASE = [
     officialDomains: ['internetdownloadmanager.com', 'secure.internetdownloadmanager.com'],
     correctUrl: 'https://www.internetdownloadmanager.com',
     category: SOFTWARE_CATEGORIES.DOWNLOAD_TOOL,
-    keywords: ['IDM', 'Internet Download Manager', 'Internet Download Manager 下载', 'IDM下载工具'],
+    keywords: ['IDM', 'Internet Download Manager', 'IDM下载工具'],
     isChineseBrand: false
   },
   {
@@ -580,7 +592,7 @@ const DOMAIN_DATABASE = [
 // ========== 压缩工具 ==========
   {
     name: 'WinRAR',
-    officialDomains: ['rarlab.com', 'win-rar.com'],
+    officialDomains: ['rarlab.com', 'win-rar.com', 'winrar.com.cn'],
     correctUrl: 'https://www.rarlab.com',
     category: SOFTWARE_CATEGORIES.COMPRESSION,
     keywords: ['WinRAR', 'winrar', 'rar'],
@@ -746,7 +758,7 @@ const DOMAIN_DATABASE = [
     officialDomains: ['cloud.baidu.com', 'intl.cloud.baidu.com'],
     correctUrl: 'https://cloud.baidu.com',
     category: SOFTWARE_CATEGORIES.DEVELOPER,
-    keywords: ['百度云', '百度智能云', 'baidu cloud'],
+    keywords: ['百度智能云', 'baidu cloud'],
     isChineseBrand: true
   },
   {
@@ -770,7 +782,7 @@ const DOMAIN_DATABASE = [
     officialDomains: ['gitee.com'],
     correctUrl: 'https://gitee.com',
     category: SOFTWARE_CATEGORIES.DEVELOPER,
-    keywords: ['Gitee', 'gitee', '码云', 'OSCHINA'],
+    keywords: ['Gitee', 'gitee', '码云'],
     isChineseBrand: true
   },
   {
@@ -786,7 +798,7 @@ const DOMAIN_DATABASE = [
     officialDomains: ['v2ex.com'],
     correctUrl: 'https://www.v2ex.com',
     category: SOFTWARE_CATEGORIES.DEVELOPER,
-    keywords: ['V2EX', 'v2ex', 'way to explore'],
+    keywords: ['V2EX', 'v2ex'],
     isChineseBrand: false
   },
   {
@@ -824,7 +836,7 @@ const DOMAIN_DATABASE = [
   },
   {
     name: 'ToDesk',
-    officialDomains: ['todesk.com'],
+    officialDomains: ['todesk.com', 'todeskai.com'],
     correctUrl: 'https://www.todesk.com',
     category: SOFTWARE_CATEGORIES.SYSTEM_TOOL,
     keywords: ['ToDesk', 'todesk', '远程桌面', '远程控制'],
@@ -931,7 +943,7 @@ const DOMAIN_DATABASE = [
   },
   {
     name: '月轮加速器',
-    officialDomains: ['www.yuelun.com'],
+    officialDomains: ['yuelun.com'],
     correctUrl: 'https://www.yuelun.com',
     category: SOFTWARE_CATEGORIES.GAME_ACCELERATOR,
     keywords: ['月轮', 'yuelun', '月轮加速器', '月轮网游加速器'],
@@ -1025,436 +1037,7 @@ const DOMAIN_DATABASE = [
     category: SOFTWARE_CATEGORIES.NEWS_INFO,
     keywords: ['知乎', 'zhihu'],
     isChineseBrand: true
-  },
-// ========== 高校/教育 ==========
-  {
-    name: '清华大学',
-    officialDomains: ['tsinghua.edu.cn'],
-    correctUrl: 'https://www.tsinghua.edu.cn',
-    category: SOFTWARE_CATEGORIES.EDUCATION,
-    keywords: ['清华', 'tsinghua'],
-    isChineseBrand: true
-  },
-  {
-    name: '北京大学',
-    officialDomains: ['pku.edu.cn'],
-    correctUrl: 'https://www.pku.edu.cn',
-    category: SOFTWARE_CATEGORIES.EDUCATION,
-    keywords: ['北大', 'pku'],
-    isChineseBrand: true
-  },
-  {
-    name: '浙江大学',
-    officialDomains: ['zju.edu.cn'],
-    correctUrl: 'https://www.zju.edu.cn',
-    category: SOFTWARE_CATEGORIES.EDUCATION,
-    keywords: ['浙大', 'zju'],
-    isChineseBrand: true
-  },
-  {
-    name: '上海交通大学',
-    officialDomains: ['sjtu.edu.cn'],
-    correctUrl: 'https://www.sjtu.edu.cn',
-    category: SOFTWARE_CATEGORIES.EDUCATION,
-    keywords: ['上海交大', 'sjtu'],
-    isChineseBrand: true
-  },
-  {
-    name: '复旦大学',
-    officialDomains: ['fudan.edu.cn'],
-    correctUrl: 'https://www.fudan.edu.cn',
-    category: SOFTWARE_CATEGORIES.EDUCATION,
-    keywords: ['复旦', 'fudan'],
-    isChineseBrand: true
-  },
-  {
-    name: '南京大学',
-    officialDomains: ['nju.edu.cn'],
-    correctUrl: 'https://www.nju.edu.cn',
-    category: SOFTWARE_CATEGORIES.EDUCATION,
-    keywords: ['南大', 'nju'],
-    isChineseBrand: true
-  },
-  {
-    name: '中国科学技术大学',
-    officialDomains: ['ustc.edu.cn'],
-    correctUrl: 'https://www.ustc.edu.cn',
-    category: SOFTWARE_CATEGORIES.EDUCATION,
-    keywords: ['中科大', 'ustc'],
-    isChineseBrand: true
-  },
-  {
-    name: '华中科技大学',
-    officialDomains: ['hust.edu.cn'],
-    correctUrl: 'https://www.hust.edu.cn',
-    category: SOFTWARE_CATEGORIES.EDUCATION,
-    keywords: ['华科', 'hust'],
-    isChineseBrand: true
-  },
-  {
-    name: '武汉大学',
-    officialDomains: ['whu.edu.cn'],
-    correctUrl: 'https://www.whu.edu.cn',
-    category: SOFTWARE_CATEGORIES.EDUCATION,
-    keywords: ['武大', 'whu'],
-    isChineseBrand: true
-  },
-  {
-    name: '西安交通大学',
-    officialDomains: ['xjtu.edu.cn'],
-    correctUrl: 'https://www.xjtu.edu.cn',
-    category: SOFTWARE_CATEGORIES.EDUCATION,
-    keywords: ['西安交大', 'xjtu'],
-    isChineseBrand: true
-  },
-  {
-    name: '中山大学',
-    officialDomains: ['sysu.edu.cn'],
-    correctUrl: 'https://www.sysu.edu.cn',
-    category: SOFTWARE_CATEGORIES.EDUCATION,
-    keywords: ['中大', 'sysu'],
-    isChineseBrand: true
-  },
-  {
-    name: '哈尔滨工业大学',
-    officialDomains: ['hit.edu.cn'],
-    correctUrl: 'https://www.hit.edu.cn',
-    category: SOFTWARE_CATEGORIES.EDUCATION,
-    keywords: ['哈工大', 'hit'],
-    isChineseBrand: true
-  },
-  {
-    name: '北京航空航天大学',
-    officialDomains: ['buaa.edu.cn'],
-    correctUrl: 'https://www.buaa.edu.cn',
-    category: SOFTWARE_CATEGORIES.EDUCATION,
-    keywords: ['北航', 'buaa'],
-    isChineseBrand: true
-  },
-  {
-    name: '北京理工大学',
-    officialDomains: ['bit.edu.cn'],
-    correctUrl: 'https://www.bit.edu.cn',
-    category: SOFTWARE_CATEGORIES.EDUCATION,
-    keywords: ['北理工', 'bit'],
-    isChineseBrand: true
-  },
-  {
-    name: '四川大学',
-    officialDomains: ['scu.edu.cn'],
-    correctUrl: 'https://www.scu.edu.cn',
-    category: SOFTWARE_CATEGORIES.EDUCATION,
-    keywords: ['川大', 'scu'],
-    isChineseBrand: true
-  },
-  {
-    name: '南开大学',
-    officialDomains: ['nankai.edu.cn'],
-    correctUrl: 'https://www.nankai.edu.cn',
-    category: SOFTWARE_CATEGORIES.EDUCATION,
-    keywords: ['南开', 'nankai'],
-    isChineseBrand: true
-  },
-  {
-    name: '同济大学',
-    officialDomains: ['tongji.edu.cn'],
-    correctUrl: 'https://www.tongji.edu.cn',
-    category: SOFTWARE_CATEGORIES.EDUCATION,
-    keywords: ['同济', 'tongji'],
-    isChineseBrand: true
-  },
-  {
-    name: '天津大学',
-    officialDomains: ['tju.edu.cn'],
-    correctUrl: 'https://www.tju.edu.cn',
-    category: SOFTWARE_CATEGORIES.EDUCATION,
-    keywords: ['天大', 'tju'],
-    isChineseBrand: true
-  },
-  {
-    name: '东南大学',
-    officialDomains: ['seu.edu.cn'],
-    correctUrl: 'https://www.seu.edu.cn',
-    category: SOFTWARE_CATEGORIES.EDUCATION,
-    keywords: ['东南', 'seu'],
-    isChineseBrand: true
-  },
-  {
-    name: '中国人民大学',
-    officialDomains: ['ruc.edu.cn'],
-    correctUrl: 'https://www.ruc.edu.cn',
-    category: SOFTWARE_CATEGORIES.EDUCATION,
-    keywords: ['人大', 'ruc'],
-    isChineseBrand: true
-  },
-// ========== 高校/教育 ==========
-  {
-    name: '北京师范大学',
-    officialDomains: ['bnu.edu.cn'],
-    correctUrl: 'https://www.bnu.edu.cn',
-    category: SOFTWARE_CATEGORIES.EDUCATION,
-    keywords: ['北师大', 'bnu'],
-    isChineseBrand: true
-  },
-  {
-    name: '华东师范大学',
-    officialDomains: ['ecnu.edu.cn'],
-    correctUrl: 'https://www.ecnu.edu.cn',
-    category: SOFTWARE_CATEGORIES.EDUCATION,
-    keywords: ['华师大', 'ecnu'],
-    isChineseBrand: true
-  },
-  {
-    name: '厦门大学',
-    officialDomains: ['xmu.edu.cn'],
-    correctUrl: 'https://www.xmu.edu.cn',
-    category: SOFTWARE_CATEGORIES.EDUCATION,
-    keywords: ['厦大', 'xmu'],
-    isChineseBrand: true
-  },
-  {
-    name: '吉林大学',
-    officialDomains: ['jlu.edu.cn'],
-    correctUrl: 'https://www.jlu.edu.cn',
-    category: SOFTWARE_CATEGORIES.EDUCATION,
-    keywords: ['吉大', 'jlu'],
-    isChineseBrand: true
-  },
-  {
-    name: '山东大学',
-    officialDomains: ['sdu.edu.cn'],
-    correctUrl: 'https://www.sdu.edu.cn',
-    category: SOFTWARE_CATEGORIES.EDUCATION,
-    keywords: ['山大', 'sdu'],
-    isChineseBrand: true
-  },
-  {
-    name: '大连理工大学',
-    officialDomains: ['dlut.edu.cn'],
-    correctUrl: 'https://www.dlut.edu.cn',
-    category: SOFTWARE_CATEGORIES.EDUCATION,
-    keywords: ['大工', 'dlut'],
-    isChineseBrand: true
-  },
-  {
-    name: '华南理工大学',
-    officialDomains: ['scut.edu.cn'],
-    correctUrl: 'https://www.scut.edu.cn',
-    category: SOFTWARE_CATEGORIES.EDUCATION,
-    keywords: ['华南理工', 'scut'],
-    isChineseBrand: true
-  },
-  {
-    name: '西北工业大学',
-    officialDomains: ['nwpu.edu.cn'],
-    correctUrl: 'https://www.nwpu.edu.cn',
-    category: SOFTWARE_CATEGORIES.EDUCATION,
-    keywords: ['西工大', 'nwpu'],
-    isChineseBrand: true
-  },
-  {
-    name: '电子科技大学',
-    officialDomains: ['uestc.edu.cn'],
-    correctUrl: 'https://www.uestc.edu.cn',
-    category: SOFTWARE_CATEGORIES.EDUCATION,
-    keywords: ['成电', 'uestc'],
-    isChineseBrand: true
-  },
-  {
-    name: '中国农业大学',
-    officialDomains: ['cau.edu.cn'],
-    correctUrl: 'https://www.cau.edu.cn',
-    category: SOFTWARE_CATEGORIES.EDUCATION,
-    keywords: ['中国农大', 'cau'],
-    isChineseBrand: true
-  },
-  {
-    name: '兰州大学',
-    officialDomains: ['lzu.edu.cn'],
-    correctUrl: 'https://www.lzu.edu.cn',
-    category: SOFTWARE_CATEGORIES.EDUCATION,
-    keywords: ['兰大', 'lzu'],
-    isChineseBrand: true
-  },
-  {
-    name: '重庆大学',
-    officialDomains: ['cqu.edu.cn'],
-    correctUrl: 'https://www.cqu.edu.cn',
-    category: SOFTWARE_CATEGORIES.EDUCATION,
-    keywords: ['重大', 'cqu'],
-    isChineseBrand: true
-  },
-  {
-    name: '中南大学',
-    officialDomains: ['csu.edu.cn'],
-    correctUrl: 'https://www.csu.edu.cn',
-    category: SOFTWARE_CATEGORIES.EDUCATION,
-    keywords: ['中南', 'csu'],
-    isChineseBrand: true
-  },
-  {
-    name: '湖南大学',
-    officialDomains: ['hnu.edu.cn'],
-    correctUrl: 'https://www.hnu.edu.cn',
-    category: SOFTWARE_CATEGORIES.EDUCATION,
-    keywords: ['湖大', 'hnu'],
-    isChineseBrand: true
-  },
-  {
-    name: '东北大学',
-    officialDomains: ['neu.edu.cn'],
-    correctUrl: 'https://www.neu.edu.cn',
-    category: SOFTWARE_CATEGORIES.EDUCATION,
-    keywords: ['东北', 'neu'],
-    isChineseBrand: true
-  },
-  {
-    name: '北京科技大学',
-    officialDomains: ['ustb.edu.cn'],
-    correctUrl: 'https://www.ustb.edu.cn',
-    category: SOFTWARE_CATEGORIES.EDUCATION,
-    keywords: ['北科大', 'ustb'],
-    isChineseBrand: true
-  },
-  {
-    name: '北京交通大学',
-    officialDomains: ['bjtu.edu.cn'],
-    correctUrl: 'https://www.bjtu.edu.cn',
-    category: SOFTWARE_CATEGORIES.EDUCATION,
-    keywords: ['北交大', 'bjtu'],
-    isChineseBrand: true
-  },
-  {
-    name: '北京邮电大学',
-    officialDomains: ['bupt.edu.cn'],
-    correctUrl: 'https://www.bupt.edu.cn',
-    category: SOFTWARE_CATEGORIES.EDUCATION,
-    keywords: ['北邮', 'bupt'],
-    isChineseBrand: true
-  },
-  {
-    name: '国防科技大学',
-    officialDomains: ['nudt.edu.cn'],
-    correctUrl: 'https://www.nudt.edu.cn',
-    category: SOFTWARE_CATEGORIES.EDUCATION,
-    keywords: ['国防科大', 'nudt'],
-    isChineseBrand: true
-  },
-  {
-    name: '南京航空航天大学',
-    officialDomains: ['nuaa.edu.cn'],
-    correctUrl: 'https://www.nuaa.edu.cn',
-    category: SOFTWARE_CATEGORIES.EDUCATION,
-    keywords: ['南航', 'nuaa'],
-    isChineseBrand: true
-  },
-// ========== 高校/教育 ==========
-  {
-    name: '南京理工大学',
-    officialDomains: ['njust.edu.cn'],
-    correctUrl: 'https://www.njust.edu.cn',
-    category: SOFTWARE_CATEGORIES.EDUCATION,
-    keywords: ['南理工', 'njust'],
-    isChineseBrand: true
-  },
-  {
-    name: '西安电子科技大学',
-    officialDomains: ['xidian.edu.cn'],
-    correctUrl: 'https://www.xidian.edu.cn',
-    category: SOFTWARE_CATEGORIES.EDUCATION,
-    keywords: ['西电', 'xidian'],
-    isChineseBrand: true
-  },
-  {
-    name: '武汉理工大学',
-    officialDomains: ['whut.edu.cn'],
-    correctUrl: 'https://www.whut.edu.cn',
-    category: SOFTWARE_CATEGORIES.EDUCATION,
-    keywords: ['武理工', 'whut'],
-    isChineseBrand: true
-  },
-  {
-    name: '中国地质大学（武汉）',
-    officialDomains: ['cug.edu.cn'],
-    correctUrl: 'https://www.cug.edu.cn',
-    category: SOFTWARE_CATEGORIES.EDUCATION,
-    keywords: ['地大', 'cug'],
-    isChineseBrand: true
-  },
-  {
-    name: '华中师范大学',
-    officialDomains: ['ccnu.edu.cn'],
-    correctUrl: 'https://www.ccnu.edu.cn',
-    category: SOFTWARE_CATEGORIES.EDUCATION,
-    keywords: ['华师', 'ccnu'],
-    isChineseBrand: true
-  },
-  {
-    name: '上海科技大学',
-    officialDomains: ['shanghaitech.edu.cn'],
-    correctUrl: 'https://www.shanghaitech.edu.cn',
-    category: SOFTWARE_CATEGORIES.EDUCATION,
-    keywords: ['上科大', 'shanghaitech'],
-    isChineseBrand: true
-  },
-  {
-    name: '南方科技大学',
-    officialDomains: ['sustech.edu.cn'],
-    correctUrl: 'https://www.sustech.edu.cn',
-    category: SOFTWARE_CATEGORIES.EDUCATION,
-    keywords: ['南科大', 'sustech'],
-    isChineseBrand: true
-  },
-  {
-    name: '上海大学',
-    officialDomains: ['shu.edu.cn'],
-    correctUrl: 'https://www.shu.edu.cn',
-    category: SOFTWARE_CATEGORIES.EDUCATION,
-    keywords: ['上大', 'shu'],
-    isChineseBrand: true
-  },
-  {
-    name: '郑州大学',
-    officialDomains: ['zzu.edu.cn'],
-    correctUrl: 'https://www.zzu.edu.cn',
-    category: SOFTWARE_CATEGORIES.EDUCATION,
-    keywords: ['郑大', 'zzu'],
-    isChineseBrand: true
-  },
-  {
-    name: '云南大学',
-    officialDomains: ['ynu.edu.cn'],
-    correctUrl: 'https://www.ynu.edu.cn',
-    category: SOFTWARE_CATEGORIES.EDUCATION,
-    keywords: ['云大', 'ynu'],
-    isChineseBrand: true
-  },
-  {
-    name: '西湖大学',
-    officialDomains: ['westlake.edu.cn'],
-    correctUrl: 'https://www.westlake.edu.cn',
-    category: SOFTWARE_CATEGORIES.EDUCATION,
-    keywords: ['西湖', 'westlake'],
-    isChineseBrand: true
-  },
-  {
-    name: '麻省理工学院',
-    officialDomains: ['mit.edu'],
-    correctUrl: 'https://www.mit.edu',
-    category: SOFTWARE_CATEGORIES.EDUCATION,
-    keywords: ['MIT', '麻省'],
-    isChineseBrand: false,
-    isNonChineseBrand: true
-  },
-  {
-    name: '斯坦福大学',
-    officialDomains: ['stanford.edu'],
-    correctUrl: 'https://www.stanford.edu',
-    category: SOFTWARE_CATEGORIES.EDUCATION,
-    keywords: ['Stanford', '斯坦福'],
-    isChineseBrand: false,
-    isNonChineseBrand: true
-  },
+  }
 ];
 
 // ==================== 快速索引构建 ====================
@@ -1467,6 +1050,31 @@ const entryByName = new Map();
 
 /** 所有官方域名的扁平集合 */
 const allOfficialDomains = new Set();
+
+// ==================== 工具函数 ====================
+
+/**
+ * Levenshtein 编辑距离（仅用于规则 D 的长关键词 typo 检测）。
+ * @param {string} a
+ * @param {string} b
+ * @returns {number}
+ */
+function _levenshtein(a, b) {
+  if (a.length === 0) return b.length;
+  if (b.length === 0) return a.length;
+  const m = [];
+  for (let i = 0; i <= b.length; i++) m[i] = [i];
+  for (let j = 0; j <= a.length; j++) m[0][j] = j;
+  for (let i = 1; i <= b.length; i++) {
+    for (let j = 1; j <= a.length; j++) {
+      m[i][j] = Math.min(
+        m[i - 1][j] + 1, m[i][j - 1] + 1,
+        m[i - 1][j - 1] + (a[j - 1] === b[i - 1] ? 0 : 1)
+      );
+    }
+  }
+  return m[b.length][a.length];
+}
 
 // ==================== detectSpoof 预处理 ====================
 
@@ -1550,10 +1158,14 @@ export class DomainDatabase {
   /**
    * 核心方法：检测域名仿冒
    *
-   * 三层递进检测（按关键词长度从长到短遍历，命中即返回）：
-   *   A. 精确段匹配：任一 label 段完全等于关键词
-   *   B. 边界包含（仅 kw.length ≥ 4）：关键词在 label 中出现且左右边界为起始/结束/分隔符
-   *   C. 关键词堆叠：同一关键词在所有段中精确出现 ≥ 3 次
+   * 5 规则递进 + 去连字符二次检测（按关键词长度从长到短遍历，命中即返回）：
+   *   A. 精确段匹配（所有长度）：任一 label 段完全等于关键词
+   *   B. 标签子串包含（仅 kw ≥ 5）：关键词在任一 label 中出现，不要求分隔符边界
+   *   C. 关键词堆叠（所有长度）：同一关键词在所有段中精确出现 ≥ 3 次
+   *   D. 约束编辑距离（仅 kw ≥ 6，dist ≤ 2，lenDiff ≤ 2）：Levenshtein 相似匹配
+   *
+   *   去连字符二次检测：若域名含 - 或 _，去除后重新跑 A/B/C，
+   *   覆盖 pay-pal-login.hl.cn 等连字符 + 子串嵌入复合变形
    *
    * @param {string} hostname - 当前页面的主机名（已由调用方转为小写）
    * @returns {Object|null} 仿冒信息 { entry, officialDomain, correctUrl, matchType, matchedBy }
@@ -1562,99 +1174,118 @@ export class DomainDatabase {
     // 1. 输入规范化：去 www + 小写
     const normalized = hostname.replace(/^www\./i, '').toLowerCase();
 
-    // 2. 标签拆分：按 . 得到 labels，每个 label 再按 -/_ 拆段
-    const labels = normalized.split('.');
-    const allSegments = [];       // 所有 label 的所有段（用于堆叠统计）
-    const labelSegments = [];     // [[segments for label 0], ...]（用于精确段匹配定位）
+    /**
+     * 对一组 labels/segments 执行规则 A/B/C，任一命中即返回结果。
+     * @param {string[]} labels       标签数组
+     * @param {string[]} allSegs      所有段平铺数组
+     * @param {string[][]} labelSegs  每个 label 的段数组
+     * @param {'original'|'dehyphened'} source 来源标记
+     * @returns {Object|null}
+     */
+    const _checkRules = (labels, allSegs, labelSegs, source) => {
+      for (const kw of sortedKeywords) {
+        // ---- 规则 A：精确段匹配（所有长度关键词） ----
+        for (const segs of labelSegs) {
+          for (const seg of segs) {
+            if (seg === kw) {
+              const entry = keywordToEntries.get(kw)[0];
+              return {
+                entry,
+                officialDomain: entry.officialDomains[0],
+                correctUrl: entry.correctUrl,
+                matchType: 'segment_exact_match',
+                matchedBy: `段 "${seg}" 精确匹配关键词 "${kw}"` +
+                  (source === 'dehyphened' ? '（去连字符）' : '')
+              };
+            }
+          }
+        }
 
+        // ---- 规则 B：标签子串包含（仅 kw >= 5，任意位置不需边界） ----
+        if (kw.length >= 5) {
+          for (const label of labels) {
+            if (label.includes(kw)) {
+              const entry = keywordToEntries.get(kw)[0];
+              return {
+                entry,
+                officialDomain: entry.officialDomains[0],
+                correctUrl: entry.correctUrl,
+                matchType: 'substring_include',
+                matchedBy: `标签 "${label}" 包含关键词 "${kw}"` +
+                  (source === 'dehyphened' ? '（去连字符）' : '')
+              };
+            }
+          }
+        }
+
+        // ---- 规则 C：关键词堆叠（所有长度，阈值 ≥3） ----
+        let hitCount = 0;
+        for (const seg of allSegs) {
+          if (seg === kw) hitCount++;
+        }
+        if (hitCount >= 3) {
+          const entry = keywordToEntries.get(kw)[0];
+          return {
+            entry,
+            officialDomain: entry.officialDomains[0],
+            correctUrl: entry.correctUrl,
+            matchType: 'keyword_stuffing',
+            matchedBy: `关键词 "${kw}" 在域名段中重复出现 ${hitCount} 次` +
+              (source === 'dehyphened' ? '（去连字符）' : '')
+          };
+        }
+      }
+      return null;
+    };
+
+    // 2. 构建原始 labels / segments
+    const labels = normalized.split('.');
+    const allSegments = [];
+    const labelSegments = [];
     for (const label of labels) {
       const segs = splitIntoSegments(label);
       labelSegments.push(segs);
       for (const s of segs) allSegments.push(s);
     }
 
-    // 3. 遍历关键词（长→短），任一规则命中即返回
+    // 3. 原始域名 → 规则 A/B/C
+    let result = _checkRules(labels, allSegments, labelSegments, 'original');
+    if (result) return result;
+
+    // 4. 去连字符二次检测（覆盖 pay-pal-login.hl.cn 等复合变形）
+    if (normalized.includes('-') || normalized.includes('_')) {
+      const deHyphened = normalized.replace(/[-_]/g, '');
+      const dhLabels = deHyphened.split('.');
+      const dhAllSegs = [];
+      const dhLabelSegs = [];
+      for (const label of dhLabels) {
+        const segs = splitIntoSegments(label);
+        dhLabelSegs.push(segs);
+        for (const s of segs) dhAllSegs.push(s);
+      }
+      result = _checkRules(dhLabels, dhAllSegs, dhLabelSegs, 'dehyphened');
+      if (result) return result;
+    }
+
+    // 5. 规则 D：约束编辑距离（仅 kw >= 6，dist 1-2，lenDiff ≤ 2）
     for (const kw of sortedKeywords) {
-      // ---- 规则 A：精确段匹配（所有长度关键词） ----
-      for (const segs of labelSegments) {
-        for (const seg of segs) {
-          if (seg === kw) {
-            const entry = keywordToEntries.get(kw)[0];
-            return {
-              entry,
-              officialDomain: entry.officialDomains[0],
-              correctUrl: entry.correctUrl,
-              matchType: 'segment_exact_match',
-              matchedBy: `段 "${seg}" 精确匹配关键词 "${kw}"`
-            };
-          }
-        }
-      }
-
-      // ---- 规则 A-2：连字匹配 —— 标签去除分隔符后精确匹配关键词 ----
-      // 钓鱼攻击常在品牌词中插入连字符：any-desk...
+      if (kw.length < 6) continue;
       for (const label of labels) {
-        if (label.includes('-') || label.includes('_')) {
-          const joined = label.replace(/[-_]/g, '');
-          if (joined === kw) {
-            const entry = keywordToEntries.get(kw)[0];
-            return {
-              entry,
-              officialDomain: entry.officialDomains[0],
-              correctUrl: entry.correctUrl,
-              matchType: 'joined_label_match',
-              matchedBy: `标签 "${label}" 去分隔符后精确匹配关键词 "${kw}"`
-            };
-          }
+        if (Math.abs(label.length - kw.length) > 2) continue;
+        const dist = _levenshtein(label, kw);
+        if (dist >= 1 && dist <= 2) {
+          const entry = keywordToEntries.get(kw)[0];
+          return {
+            entry,
+            officialDomain: entry.officialDomains[0],
+            correctUrl: entry.correctUrl,
+            matchType: 'typosquat',
+            matchedBy: `Levenshtein 距离 ${dist}: "${label}" ≈ "${kw}"`
+          };
         }
-      }
-
-      // ---- 规则 B：边界包含（仅 kw.length >= 4） ----
-      if (kw.length >= 4) {
-        for (const label of labels) {
-          let searchFrom = 0;
-          while (true) {
-            const idx = label.indexOf(kw, searchFrom);
-            if (idx === -1) break;
-
-            const leftOk = idx === 0 || label[idx - 1] === '-' || label[idx - 1] === '_';
-            const rightEnd = idx + kw.length;
-            const rightOk = rightEnd === label.length || label[rightEnd] === '-' || label[rightEnd] === '_';
-
-            if (leftOk && rightOk) {
-              const entry = keywordToEntries.get(kw)[0];
-              return {
-                entry,
-                officialDomain: entry.officialDomains[0],
-                correctUrl: entry.correctUrl,
-                matchType: 'boundary_include',
-                matchedBy: `标签 "${label}" 以边界方式包含关键词 "${kw}"`
-              };
-            }
-
-            searchFrom = idx + 1; // 继续搜索 label 中后续出现位置
-          }
-        }
-      }
-
-      // ---- 规则 C：关键词堆叠（所有长度关键词，阈值 ≥3） ----
-      let hitCount = 0;
-      for (const seg of allSegments) {
-        if (seg === kw) hitCount++;
-      }
-      if (hitCount >= 3) {
-        const entry = keywordToEntries.get(kw)[0];
-        return {
-          entry,
-          officialDomain: entry.officialDomains[0],
-          correctUrl: entry.correctUrl,
-          matchType: 'keyword_stuffing',
-          matchedBy: `关键词 "${kw}" 在域名段中重复出现 ${hitCount} 次`
-        };
       }
     }
 
-    // 4. 无匹配
     return null;
   }
 

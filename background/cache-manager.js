@@ -6,7 +6,6 @@
  * 恶意和安全结果均会缓存以减少重复分析。
  *
  * @module cache-manager
- * @version 2.4.0-alpha.1
  *
  * 缓存条目结构：
  *   {
@@ -26,6 +25,18 @@
 
 import { STORAGE_KEYS, CACHE_TTL } from '../utils/constants.js';
 
+/** 从用户设置读取缓存 TTL，回退到 CACHE_TTL */
+let _cachedTtlMs = null;
+async function _getCacheTtlMs() {
+  if (_cachedTtlMs !== null) return _cachedTtlMs;
+  try {
+    const r = await chrome.storage.local.get('global_settings');
+    const gs = r.global_settings || {};
+    _cachedTtlMs = (gs.cache_ttlHours > 0 ? gs.cache_ttlHours * 3600000 : CACHE_TTL);
+  } catch (e) { _cachedTtlMs = CACHE_TTL; }
+  return _cachedTtlMs;
+}
+
 export class CacheManager {
   /**
    * 获取域名的缓存结果
@@ -41,7 +52,7 @@ export class CacheManager {
       if (!entry) return null;
 
       // 检查是否过期
-      if (Date.now() - entry.timestamp > CACHE_TTL) {
+      if (Date.now() - entry.timestamp > await _getCacheTtlMs()) {
         // 过期删除
         await chrome.storage.local.remove(key);
         return null;

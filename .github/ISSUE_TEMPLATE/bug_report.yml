@@ -1,0 +1,111 @@
+name: "🐛 Bug 报告"
+description: 报告扩展的异常行为或错误
+title: "[Bug] "
+labels: ["bug"]
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢你花时间填写这个 Bug 报告！请尽可能提供详细信息。
+
+  - type: dropdown
+    id: type
+    attributes:
+      label: 类型
+      description: 问题所属类别
+      options:
+        - Bugs（功能异常）
+        - Security（安全问题）
+        - Performance（性能问题）
+        - UI/UX（界面问题）
+        - Compatibility（兼容性问题）
+      default: 0
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: 描述
+      description: 简明扼要地描述这个 Bug 是什么
+      placeholder: 请描述 Bug 的核心问题，例如：在什么情况下、触发了什么异常。
+    validations:
+      required: true
+
+  - type: textarea
+    id: details
+    attributes:
+      label: 复现步骤 / 详情
+      description: 详细描述复现步骤或问题详情，包括涉及的网址
+      placeholder: |
+        1. 涉及网址：请填写出现问题的网站链接
+        2. 复现步骤：
+        3. 其他相关信息：
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: observed
+    attributes:
+      label: 实际行为（Observed Behavior）
+      description: 描述当前观察到的错误表现
+      placeholder: 请描述当前实际发生了什么，例如：扩展检测结果是什么、显示了什么错误信息。
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期行为（Expected Behavior）
+      description: 描述你期望的正确表现
+      placeholder: 请描述你期望扩展应该正确显示什么结果。
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: 扩展版本
+      description: 你使用的扩展版本号（manifest.json 中的 version）
+      placeholder: 请填写扩展版本号，如 2.4.0
+    validations:
+      required: false
+
+  - type: input
+    id: browser
+    attributes:
+      label: 浏览器及版本
+      placeholder: 请填写浏览器名称和版本，如 Chrome 120.0
+    validations:
+      required: false
+
+  - type: input
+    id: os
+    attributes:
+      label: 操作系统
+      placeholder: 请填写操作系统，如 Windows 11
+    validations:
+      required: false
+
+  - type: textarea
+    id: related_files
+    attributes:
+      label: 相关代码文件
+      description: 列出与此问题相关的代码文件路径（每行一个）
+      placeholder: |
+        请填写相关代码文件路径，如：
+        background/icp-utils.js
+      render: shell
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 错误日志 / 截图
+      description: 如有错误日志或截图，请附上
+      placeholder: 请将错误日志、截图或控制台输出粘贴到此处
+    validations:
+      required: false

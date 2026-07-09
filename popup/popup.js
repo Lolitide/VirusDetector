@@ -1,5 +1,5 @@
 /**
- * 银狐木马检测 - Popup UI (v2.4.0-alpha.1)
+ * 银狐木马检测 - Popup UI
  * SVG图标系统 + 优化排版 + 白名单极简模式
  */
 (function () {
@@ -26,7 +26,7 @@
     // 白名单取消星标
     starOff: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="3" x2="21" y2="21"/><path d="M12 2l3.1 6.3L22 9.3l-5 4.9 1.2 6.8-6.2-3.3-6.2 3.3 1.2-6.8-5-4.9 6.9-1z"/></svg>',
     // 刷新
-    refresh: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.5 9a9 9 0 0114.8-3.7L23 10M.5 15a9 9 0 0014.8 3.7L20 15"/></svg>',
+    refresh: '<svg role="img" xmlns="http://www.w3.org/2000/svg" width="57px" height="57px" viewBox="0 0 24 24"          aria-labelledby="refreshIconTitle" stroke="currentColor" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter" fill="none"><polyline points="22 12 19 15 16 12" /><path d="M11,20 C6.581722,20 3,16.418278 3,12 C3,7.581722 6.581722,4 11,4 C15.418278,4 19,7.581722 19,12 L19,14" /></svg>',
     // 绿色大勾（白名单/安全分数）
     checkLarge: '<svg viewBox="0 0 24 24" width="44" height="44"><circle cx="12" cy="12" r="11" fill="#4CAF50"/><path d="M7 12l3 3 7-7" stroke="white" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   };
@@ -35,9 +35,8 @@
     header: $('header'), loading: $('loading'),
     safePanel: $('safe-panel'), warningPanel: $('warning-panel'),
     whitelistPanel: $('whitelist-panel'),
-    scoreValue: $('score-value'), statusText: $('status-text'),
+    scoreValue: $('score-value'),
     currentDomain: $('current-domain'),
-    riskLevelText: $('risk-level-text'),
     warningScoreValue: $('warning-score-value'),
     warningStatusText: $('warning-status-text'),
     officialLinkSection: $('official-link-section'),
@@ -172,10 +171,10 @@
 
   function updateWhitelistButton(isWhitelisted) {
     if (isWhitelisted) {
-      els.whitelistBtn.innerHTML = ICONS.starOff + '移出白名单';
+      els.whitelistBtn.innerHTML = ICONS.starOff + '<span class="btn-label">移出白名单</span>';
       els.whitelistBtn.classList.add('active');
     } else {
-      els.whitelistBtn.innerHTML = ICONS.star + '加入白名单';
+      els.whitelistBtn.innerHTML = ICONS.star + '<span class="btn-label">加入白名单</span>';
       els.whitelistBtn.classList.remove('active');
     }
   }
@@ -193,10 +192,7 @@
     els.scoreValue.textContent = score;
     // 动态更新评分卡片（颜色、图标、刻度尺指示器）
     updateScoreDisplay(els.scoreValue, els.safeGaugeIndicator, els.safeScoreIcon, score, false);
-    els.statusText.textContent = '安全';
-    els.currentDomain.textContent = data.domain || '-';
-    els.riskLevelText.textContent = '正常';
-    els.riskLevelText.className = 'info-value safe-text';
+    if (els.currentDomain) els.currentDomain.textContent = data.domain || '';
   }
 
   function showWhitelisted(data) {
@@ -286,7 +282,7 @@
 
         if (rule && rule.icpVerified && rule.icpNumbers && rule.icpNumbers.length > 0) {
           // 已核验 → 显示工信部查询链接
-          textEl.textContent = `ICP备案: 已检测到 (${rule.icpNumbers[0]})`;
+          textEl.textContent = `ICP备案: 检测到 (${rule.icpNumbers[0]})`;
           const linkEl = document.createElement('a');
           linkEl.className = 'icp-query-link';
           linkEl.href = 'https://beian.miit.gov.cn/';
@@ -375,13 +371,133 @@
 
   els.refreshBtn.addEventListener('click', async () => {
     showLoading();
-    els.refreshBtn.innerHTML = ICONS.pending + '检测中...';
+    els.refreshBtn.innerHTML = ICONS.pending + '<span class="btn-label">正在检测...</span>';
     els.refreshBtn.disabled = true;
     await requestReanalysis();
     await render();
-    els.refreshBtn.innerHTML = ICONS.refresh + '重新检测';
+    els.refreshBtn.innerHTML = ICONS.refresh + '<span class="btn-label">重新测一遍</span>';
     els.refreshBtn.disabled = false;
   });
+
+  // 检测详情折叠/展开
+  const detailsToggle = document.getElementById('details-toggle');
+  if (detailsToggle) {
+    detailsToggle.addEventListener('click', () => {
+      els.detailsSection.classList.toggle('expanded');
+    });
+  }
+
+  // GitHub 按钮
+  const githubBtn = document.getElementById('github-btn');
+  if (githubBtn) {
+    githubBtn.addEventListener('click', () => {
+      chrome.tabs.create({ url: 'https://github.com/Lolitide/VirusDetector' });
+    });
+  }
+
+  // 设置按钮 → 打开选项页
+  const settingsBtn = document.getElementById('settings-btn');
+  if (settingsBtn) {
+    settingsBtn.addEventListener('click', () => {
+      chrome.tabs.create({ url: chrome.runtime.getURL('options/options.html') });
+    });
+  }
+
+  // 背景容器（header 区域点击跳转 GitHub）
+  const bgContainer = document.getElementById('bg-container');
+  if (bgContainer) {
+    bgContainer.addEventListener('click', () => {
+      chrome.tabs.create({ url: 'https://github.com/Lolitide/VirusDetector' });
+    });
+  }
+
+  // 上报按钮：误报
+  const reportFalseBtn = document.getElementById('report-false-btn');
+  const reportPhishBtn = document.getElementById('report-phish-btn');
+
+  if (reportFalseBtn) {
+    reportFalseBtn.addEventListener('click', async () => {
+      reportFalseBtn.disabled = true;
+      reportFalseBtn.querySelector('.btn-label').textContent = '上报中...';
+      try {
+        const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (tabs.length === 0) return;
+        const domain = new URL(tabs[0].url || '').hostname;
+        await chrome.runtime.sendMessage({
+          type: 'SUBMIT_REPORT',
+          payload: { reportType: 'false_positive', domain, note: '' }
+        });
+        // 刷新面板显示白名单状态
+        await new Promise(r => setTimeout(r, 400));
+        await render();
+      } catch (e) {
+        console.error('[Popup] 误报上报失败:', e);
+        reportFalseBtn.querySelector('.btn-label').textContent = '误报';
+        reportFalseBtn.disabled = false;
+      }
+    });
+  }
+
+  let pendingConfirm = false;
+  let confirmTimer = null;
+
+  if (reportPhishBtn) {
+    reportPhishBtn.addEventListener('click', async () => {
+      if (!pendingConfirm) {
+        // 第一次点击 — 进入确认状态
+        pendingConfirm = true;
+        reportPhishBtn.querySelector('.btn-label').textContent = '确定上报？';
+        reportPhishBtn.style.color = '#FF6E6E';
+        reportPhishBtn.style.borderColor = '#FF6E6E';
+        confirmTimer = setTimeout(() => {
+          resetConfirmState();
+        }, 3000);
+        return;
+      }
+
+      // 第二次点击 — 真正上报
+      clearTimeout(confirmTimer);
+      pendingConfirm = false;
+      resetConfirmState();
+      reportPhishBtn.disabled = true;
+      reportPhishBtn.querySelector('.btn-label').textContent = '上报中...';
+      try {
+        const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (tabs.length === 0) return;
+        const domain = new URL(tabs[0].url || '').hostname;
+        await chrome.runtime.sendMessage({
+          type: 'SUBMIT_REPORT',
+          payload: { reportType: 'confirmed_phish', domain, note: '' }
+        });
+        reportPhishBtn.querySelector('.btn-label').textContent = '已上报';
+        // 刷新面板
+        await new Promise(r => setTimeout(r, 400));
+        await render();
+      } catch (e) {
+        console.error('[Popup] 钓鱼确认上报失败:', e);
+        reportPhishBtn.querySelector('.btn-label').textContent = '鉴定为钓鱼';
+        reportPhishBtn.disabled = false;
+      }
+    });
+
+    // 点击按钮以外区域取消确认
+    document.addEventListener('click', (e) => {
+      if (pendingConfirm && !reportPhishBtn.contains(e.target)) {
+        clearTimeout(confirmTimer);
+        resetConfirmState();
+      }
+    });
+  }
+
+  function resetConfirmState() {
+    pendingConfirm = false;
+    if (confirmTimer) { clearTimeout(confirmTimer); confirmTimer = null; }
+    if (reportPhishBtn) {
+      reportPhishBtn.querySelector('.btn-label').textContent = '鉴定为钓鱼';
+      reportPhishBtn.style.color = '';
+      reportPhishBtn.style.borderColor = '';
+    }
+  }
 
   // 白名单按钮
   els.whitelistBtn.addEventListener('click', async () => {
@@ -420,11 +536,62 @@
     els.whitelistBtn.disabled = false;
   });
 
+  // ==================== 版本号注入（从 manifest 读取，无需随版本号修改 HTML） ====================
+  (function injectVersion() {
+    try {
+      const v = chrome.runtime.getManifest().version_name || chrome.runtime.getManifest().version;
+      const subtitle = document.querySelector('.header-subtitle');
+      const footerVer = document.querySelector('.footer-version');
+      if (subtitle) subtitle.textContent = 'Virus Detector v' + v;
+      if (footerVer) footerVer.textContent = 'v' + v;
+    } catch (e) { /* ignore */ }
+  })();
+
+  // ==================== 版本更新提示 ====================
+
+  /** 检查是否有新版本可用，控制 header 中 GitHub 按钮的展开动画和提示文字 */
+  async function checkUpdateBadge() {
+    const bgContainer = document.getElementById('bg-container');
+    const tooltip = document.getElementById('github-tooltip');
+    if (!bgContainer || !tooltip) return;
+
+    try {
+      const stored = await chrome.storage.local.get('updateAvailable');
+      if (stored && stored.updateAvailable) {
+        // 有新版本 → 自动展开并维持，显示"新版本!"
+        bgContainer.classList.add('expanded');
+        tooltip.textContent = '新版本!';
+      } else {
+        // 无新版本 → 仅 hover 时展开，显示"了解更多"
+        bgContainer.classList.remove('expanded');
+        tooltip.textContent = '了解更多';
+      }
+    } catch (e) {
+      // 读取失败时保持默认状态（无更新）
+    }
+  }
+
   // ==================== 初始化 ====================
 
+  /** 从 storage 读取主题并立即应用 */
+  async function applyTheme() {
+    try {
+      const stored = await chrome.storage.local.get('global_settings');
+      const settings = stored && stored.global_settings ? stored.global_settings : {};
+      const theme = settings.theme || 'dark';
+      document.documentElement.setAttribute('data-theme', theme);
+      // 同步到 localStorage 以便下次加载无闪烁
+      try { localStorage.setItem('vt_theme', theme); } catch (e) { }
+    } catch (e) {
+      document.documentElement.setAttribute('data-theme', 'dark');
+    }
+  }
+
   if (document.readyState === 'complete' || document.readyState === 'interactive') {
-    render();
+    applyTheme().then(() => { render(); checkUpdateBadge(); });
   } else {
-    document.addEventListener('DOMContentLoaded', render);
+    document.addEventListener('DOMContentLoaded', () => {
+      applyTheme().then(() => { render(); checkUpdateBadge(); });
+    });
   }
 })();

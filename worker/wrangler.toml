@@ -1,0 +1,17 @@
+# Virus Detector — 用户上报 Worker 配置
+#
+# 部署步骤：
+#   1. npm install -g wrangler
+#   2. wrangler login
+#   3. wrangler secret put GITHUB_TOKEN   # 输入 GitHub PAT（需要 repo scope）
+#   4. wrangler deploy
+#
+# 部署后会得到 URL，如 https://report-issue.xxx.workers.dev
+# 将此 URL 填入 utils/constants.js 的 REPORT_API_URL
+
+name = "virus-detector-report"
+main = "report-issue.js"
+compatibility_date = "2024-01-01"
+
+# 免费计划足够（每日 10 万次请求）
+# 如有需要可绑定自定义域名
