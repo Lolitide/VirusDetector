@@ -276,6 +276,12 @@ export class ScoringEngine {
     let domainAgeResult = { score: 0, triggered: false, status: 'pass', detail: '', detailCN: '域名年龄: 等待查询', creationDays: -1 };
     let ageBonusResult = { score: 0, triggered: false, status: 'pass', detail: '', detailCN: '域名减分: 等待查询', bonusScore: 0 };
 
+    // 白名单域名不进行 Whois 查询，直接标记为未应用
+    if (isConfirmedOfficial) {
+      domainAgeResult.detailCN = '域名年龄: 未应用';
+      ageBonusResult.detailCN = '域名减分: 未应用';
+    }
+
     if (!isConfirmedOfficial && domainAgeResultCached && domainAgeResultCached.creationDays >= 0) {
       // 缓存命中：同步计算域名年龄评分
       const x = domainAgeResultCached.creationDays;

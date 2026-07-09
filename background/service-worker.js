@@ -993,7 +993,10 @@ async function analyzePage(tabId, url, domain, pageMetrics, linkMetrics) {
     });
 
     // ═══ 阶段2：异步 Whois 域名年龄补充（不阻塞主流程） ═══
-    if (tabState._whoisPending) {
+    if (tabState._whoisPending && !tabState._whoisInflight) {
+      tabState._whoisInflight = true;
+      await saveTabState(tabId, tabState);
+
       // 保存上下文用于异步回调中的竞态检查
       const ctxSnapshot = {
         domain, tabId, pageUrl: tabState.url || url,
@@ -1067,6 +1070,7 @@ async function _applyWhoisUpdate(ctx, whoisResult) {
   tabState.riskLevel = whoisResult.riskLevel;
   tabState.ruleResults = mergedBreakdown;
   tabState._whoisPending = false;
+  tabState._whoisInflight = false;
   await saveTabState(tabId, tabState);
 
   // 更新缓存
@@ -1255,7 +1259,9 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
     }
 
     // 更新下载状态
-    const fileName = downloadItem.filename.split(/[\\/]/).pop();
+    let fileName = downloadItem.filename.split(/[\\/]/).pop();
+    if (!fileName) try { fileName = decodeURIComponent(new URL(downloadItem.url).pathname.split('/').pop()); } catch { /* ignore */ }
+    if (!fileName) fileName = '未知文件';
     tabState.downloadState = {
       hasDownloadedArchive: true,
       archiveFileName: fileName,
