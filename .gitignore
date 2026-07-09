@@ -15,3 +15,9 @@ Thumbs.db
 # Test log files
 VirusDetectorLog/
 VirusDetectorDevFile/
+
+# node modules
+node_modules/
+dist/
+package-lock.json
+package.json

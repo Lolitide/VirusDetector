@@ -17,9 +17,8 @@
     "http://*/*",
     "https://*/*"
   ],
-  "background": {
-    "service_worker": "background/service-worker.js",
-    "scripts": ["background.js"],
+  "firefox:background": {
+    "scripts": ["background/service-worker.js"],
     "type": "module"
   },
   "content_scripts": [
@@ -85,7 +84,7 @@
 
   "browser_specific_settings": {
     "gecko": {
-      "id": "virus-detector@example.com",
+      "id": "x2027235787@outlook.com",
       "strict_min_version": "140.0",
       "data_collection_permissions": {
         "required": ["none"],
