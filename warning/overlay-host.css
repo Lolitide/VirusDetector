@@ -1,0 +1,22 @@
+#__virus_detector_full_warning {
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 2147483647 !important;
+}
+
+#__virus_detector_full_warning .__virus-detector-overlay-veil {
+  position: absolute !important;
+  inset: 0 !important;
+  background: rgba(7, 15, 19, 0.54) !important;
+  backdrop-filter: blur(18px) saturate(120%) !important;
+  -webkit-backdrop-filter: blur(18px) saturate(120%) !important;
+}
+
+#__virus_detector_full_warning .__virus-detector-overlay-frame {
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  border: 0 !important;
+  background: transparent !important;
+}

@@ -493,6 +493,10 @@ async function injectWarningOverlay(tabId, tabState) {
   const overlayUrl = chrome.runtime.getURL('warning/overlay.html?' + params.toString());
 
   try {
+    await chrome.scripting.insertCSS({
+      target: { tabId },
+      files: ['warning/overlay-host.css']
+    });
     await chrome.scripting.executeScript({
       target: { tabId },
       func: renderWarningOverlayFrame,
@@ -509,15 +513,14 @@ function renderWarningOverlayFrame(overlayUrl, correctUrl) {
 
   const host = document.createElement('div');
   host.id = '__virus_detector_full_warning';
-  host.style.cssText = 'position:fixed;inset:0;z-index:2147483647;';
 
   const veil = document.createElement('div');
-  veil.style.cssText = 'position:absolute;inset:0;background:rgba(7,15,19,.54);backdrop-filter:blur(18px) saturate(120%);-webkit-backdrop-filter:blur(18px) saturate(120%);';
+  veil.className = '__virus-detector-overlay-veil';
 
   const frame = document.createElement('iframe');
+  frame.className = '__virus-detector-overlay-frame';
   frame.src = overlayUrl;
   frame.title = 'Virus Detector 安全风险警告';
-  frame.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;border:0;background:transparent;';
 
   host.append(veil, frame);
   document.documentElement.appendChild(host);

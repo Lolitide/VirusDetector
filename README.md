@@ -99,6 +99,7 @@ VirusDetector/
 ├── warning/
 │   ├── overlay.html                   # 页面风险覆盖层 UI
 │   ├── overlay.css                    # 覆盖层玻璃视觉与响应式布局
+│   ├── overlay-host.css               # 注入页面的覆盖层挂载样式
 │   ├── overlay.js                     # 覆盖层交互与父页面消息通信
 │   ├── warning.html                   # 旧版独立警告窗口（默认流程已由页面覆盖层取代）
 │   ├── warning.css                    # 旧版警告窗口样式
