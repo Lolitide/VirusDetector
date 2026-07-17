@@ -477,7 +477,7 @@ async function injectDownloadBlocker(tabId, archiveUrls = []) {
 
 /**
  * 在高风险网页上注入可随视口自适应的全页警告覆盖层。
- * Shadow DOM 将扩展样式与被检测网页的样式隔离。
+ * 扩展 iframe 将覆盖层样式与被检测网页的样式隔离。
  */
 async function injectWarningOverlay(tabId, tabState) {
   const warningData = {
@@ -485,12 +485,18 @@ async function injectWarningOverlay(tabId, tabState) {
     score: Number(tabState.score) || 0,
     correctUrl: tabState.correctUrl || ''
   };
+  const params = new URLSearchParams({
+    domain: warningData.domain,
+    score: String(warningData.score),
+    correctUrl: warningData.correctUrl
+  });
+  const overlayUrl = chrome.runtime.getURL('warning/overlay.html?' + params.toString());
 
   try {
     await chrome.scripting.executeScript({
       target: { tabId },
-      func: renderWarningOverlay,
-      args: [warningData],
+      func: renderWarningOverlayFrame,
+      args: [overlayUrl, warningData.correctUrl],
       injectImmediately: true
     });
   } catch (e) {
@@ -498,104 +504,41 @@ async function injectWarningOverlay(tabId, tabState) {
   }
 }
 
-function renderWarningOverlay(warningData) {
+function renderWarningOverlayFrame(overlayUrl, correctUrl) {
   if (document.getElementById('__virus_detector_full_warning')) return;
 
   const host = document.createElement('div');
   host.id = '__virus_detector_full_warning';
-  host.style.cssText = 'position:fixed;inset:0;z-index:2147483647;pointer-events:auto;';
-  const shadow = host.attachShadow({ mode: 'closed' });
+  host.style.cssText = 'position:fixed;inset:0;z-index:2147483647;';
 
-  shadow.innerHTML = `
-    <style>
-      :host { all: initial; }
-      *, *::before, *::after { box-sizing: border-box; }
-      .veil {
-        position: fixed; inset: 0; display: grid; place-items: center; overflow: auto;
-        padding: clamp(20px, 5vw, 72px); color: #f2f8f7;
-        background: rgba(7, 15, 19, .54); backdrop-filter: blur(18px) saturate(120%);
-        -webkit-backdrop-filter: blur(18px) saturate(120%);
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
-      }
-      .panel {
-        width: min(920px, 100%); min-height: min(620px, 100%); display: grid;
-        grid-template-rows: auto 1fr auto; overflow: hidden; background: rgba(20, 35, 39, .58);
-        border: 1px solid rgba(255, 255, 255, .3); border-radius: 20px;
-        box-shadow: 0 28px 80px rgba(0, 0, 0, .36), inset 0 1px 0 rgba(255, 255, 255, .16);
-        animation: panel-enter .45s cubic-bezier(.2,.8,.2,1) both;
-      }
-      .topbar { display: flex; align-items: center; gap: 12px; min-height: 78px; padding: 0 30px; border-bottom: 1px solid rgba(233, 250, 246, .14); }
-      .mark { display: grid; width: 38px; height: 38px; place-items: center; color: #fff; background: rgba(176, 64, 69, .82); border: 1px solid rgba(255, 219, 216, .38); border-radius: 12px; }
-      .mark svg { width: 22px; height: 22px; }.brand { font-size: 15px; font-weight: 720; }.brand small { display: block; margin-top: 2px; color: rgba(234,247,244,.58); font-size: 10px; letter-spacing: 1px; }
-      .live { display: flex; gap: 7px; align-items: center; margin-left: auto; color: #ffd0cd; font-size: 11px; }.live i { width: 6px; height: 6px; background: #ff8582; border-radius: 50%; animation: pulse 1.7s ease-in-out infinite; }
-      .content { display: grid; grid-template-columns: minmax(0, 1fr) 260px; gap: clamp(28px, 6vw, 74px); align-items: center; padding: clamp(32px, 6vw, 72px); }
-      .eyebrow { display: flex; gap: 8px; align-items: center; color: #ffb7b3; font-size: 11px; font-weight: 700; letter-spacing: 1px; }.eyebrow::before { width: 22px; height: 1px; content: ""; background: currentColor; }
-      h1 { max-width: 560px; margin: 17px 0 14px; font-size: clamp(38px, 5.5vw, 68px); font-weight: 730; line-height: 1.05; letter-spacing: 0; } h1 em { color: #ffb4b0; font-style: normal; }
-      .summary { max-width: 530px; margin: 0; color: rgba(232, 246, 243, .72); font-size: 15px; line-height: 1.72; }
-      .site { display: flex; gap: 12px; align-items: center; max-width: 520px; margin-top: 34px; padding: 13px 0; border-top: 1px solid rgba(231, 247, 244, .16); border-bottom: 1px solid rgba(231, 247, 244, .16); }.site svg { width: 20px; height: 20px; color: #ffb4b0; }.site span { color: rgba(229,246,243,.54); font-size: 11px; }.site strong { display:block; margin-top:3px; font-size:14px; font-weight:620; word-break:break-all; }
-      .score-panel { padding: 23px; background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.18); border-radius: 18px; box-shadow: inset 0 1px 0 rgba(255,255,255,.11); animation: panel-enter .55s .14s cubic-bezier(.2,.8,.2,1) both; }.score-label { color: rgba(234,247,244,.58); font-size: 10px; font-weight: 700; letter-spacing: .9px; }
-      .ring { display: grid; width: 170px; height: 170px; margin: 27px auto; place-items: center; border: 11px solid rgba(255,151,147,.2); border-top-color: #ff8c88; border-right-color: #ff8c88; border-radius: 50%; transform: rotate(30deg); animation: scan 3.1s ease-in-out infinite; }.ring div { text-align:center; transform:rotate(-30deg); }.ring strong { display:block; color:#fff; font-size:50px; line-height:.9; }.ring span { display:block; margin-top:9px; color:#ffcbc8; font-size:10px; }
-      .signals { display:grid; }.signal { display:flex; align-items:center; min-height:39px; border-top:1px solid rgba(232,246,243,.13); animation: signal-enter .35s ease both; }.signal:nth-child(1){animation-delay:.28s}.signal:nth-child(2){animation-delay:.36s}.signal:nth-child(3){animation-delay:.44s}.signal::before { width:6px; height:6px; margin-right:9px; content:""; background:#ff928e; border-radius:50%; }.signal span{flex:1;color:rgba(239,249,247,.75);font-size:12px}.signal b{color:#ffb9b5;font-size:11px;font-weight:600}
-      .details { display: none; max-width: 530px; margin-top: 18px; padding: 13px 15px; color: rgba(235,247,244,.74); background: rgba(255,255,255,.07); border: 1px solid rgba(255,255,255,.13); border-radius: 9px; font-size: 12px; line-height: 1.65; }.details.visible { display:block; animation: content-enter .2s ease both; }
-      .actions { display:flex; flex-wrap:wrap; gap:10px; margin-top:27px; }.actions button { min-height:43px; padding:0 17px; border-radius:8px; font:inherit; font-size:13px; font-weight:700; cursor:pointer; transition:transform .16s ease, background .16s ease; }.actions button:hover{transform:translateY(-2px)}.leave { color:#2b0e10; background:#ffb4b0; border:1px solid #ffb4b0; }.leave:hover{background:#ffd0cd}.official { color:#ecf8f5; background:rgba(233,249,245,.1); border:1px solid rgba(233,249,245,.3); }.official:hover{background:rgba(233,249,245,.19)}.details-button { padding:0 !important; color:#ffcbc8; background:transparent; border:0; }
-      .footer { display:flex; align-items:center; min-height:58px; padding:0 30px; color:rgba(232,246,243,.47); border-top:1px solid rgba(233,250,246,.14); font-size:11px; }.footer span{margin-left:auto}
-      @keyframes panel-enter{from{opacity:0;transform:translateY(16px) scale(.985)}to{opacity:1;transform:none}} @keyframes content-enter{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}} @keyframes signal-enter{from{opacity:0;transform:translateX(7px)}to{opacity:1;transform:none}} @keyframes pulse{50%{opacity:.35;transform:scale(.75)}} @keyframes scan{50%{box-shadow:0 0 0 10px rgba(255,135,131,.08)}}
-      @media (max-width: 700px) { .veil { padding: 12px; }.panel { min-height: 100%; border-radius: 14px; }.topbar { min-height: 66px; padding: 0 20px; }.content { grid-template-columns: 1fr; gap: 28px; padding: 32px 24px; }.score-panel { order: -1; display: grid; grid-template-columns: 1fr auto; align-items: center; column-gap: 20px; }.ring { width: 116px; height: 116px; margin: 0; border-width: 8px; }.ring strong { font-size: 35px; }.signals { grid-column: 1 / -1; }.footer { padding: 0 20px; }.footer span { display: none; } }
-      @media (prefers-reduced-motion: reduce) { *,*::before,*::after { animation-duration:.01ms !important; animation-iteration-count:1 !important; transition-duration:.01ms !important; } }
-    </style>
-    <div class="veil">
-      <section class="panel" role="alertdialog" aria-modal="true" aria-labelledby="warning-title">
-        <header class="topbar"><span class="mark"><svg viewBox="0 0 24 24" fill="none"><path d="M12 2 20 5v6c0 5-3.4 9.4-8 11-4.6-1.6-8-6-8-11V5l8-3Z" stroke="currentColor" stroke-width="1.8"/><path d="m8.5 12 2.2 2.2 4.8-5" stroke="currentColor" stroke-width="1.8"/></svg></span><span class="brand">银狐木马检测<small>VIRUS DETECTOR</small></span><span class="live"><i></i>风险已拦截</span></header>
-        <main class="content"><div><div class="eyebrow">风险警报</div><h1 id="warning-title">检测到网站<br/><em>存在高风险。</em></h1><p class="summary">该网站同时出现仿冒域名、可疑下载或备案异常信号。请不要输入个人信息，也不要下载任何文件。</p><div class="site"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="8"/><path d="M4 12h16M12 4a12 12 0 0 1 0 16M12 4a12 12 0 0 0 0 16"/></svg><div><span>当前浏览站点</span><strong id="domain"></strong></div></div><div class="details" id="details">风险评分综合了域名仿冒、下载来源、ICP备案、链接结构和注册时间等信号。覆盖层会持续阻止当前页面上的危险下载操作。</div><div class="actions"><button class="leave" id="leave">离开此网站</button><button class="official" id="official">前往官方网站</button><button class="details-button" id="details-button">查看检测原因</button></div></div><aside class="score-panel"><div class="score-label">SCAN SUMMARY</div><div class="ring"><div><strong id="score"></strong><span>综合风险评分</span></div></div><div class="signals"><div class="signal"><span>域名仿冒检测</span><b>已触发</b></div><div class="signal"><span>下载来源检查</span><b>已触发</b></div><div class="signal"><span>ICP备案信息</span><b>未发现</b></div></div></aside></main>
-        <footer class="footer">Virus Detector 正在保护此页面<span>本地分析，不上传页面正文</span></footer>
-      </section>
-    </div>`;
+  const veil = document.createElement('div');
+  veil.style.cssText = 'position:absolute;inset:0;background:rgba(7,15,19,.54);backdrop-filter:blur(18px) saturate(120%);-webkit-backdrop-filter:blur(18px) saturate(120%);';
 
-  const domain = shadow.getElementById('domain');
-  const score = shadow.getElementById('score');
-  const official = shadow.getElementById('official');
-  domain.textContent = warningData.domain;
-  score.textContent = String(warningData.score);
+  const frame = document.createElement('iframe');
+  frame.src = overlayUrl;
+  frame.title = 'Virus Detector 安全风险警告';
+  frame.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;border:0;background:transparent;';
 
-  let officialUrl = '';
-  try {
-    const candidate = new URL(warningData.correctUrl);
-    if (candidate.protocol === 'https:' || candidate.protocol === 'http:') {
-      officialUrl = candidate.href;
-    }
-  } catch (e) {
-    // No trusted official destination is available.
-  }
-
-  if (!officialUrl) {
-    official.hidden = true;
-  } else {
-    official.addEventListener('click', () => window.location.assign(officialUrl));
-  }
-
-  shadow.getElementById('leave').addEventListener('click', () => window.location.replace('about:blank'));
-  shadow.getElementById('details-button').addEventListener('click', () => {
-    const details = shadow.getElementById('details');
-    details.classList.toggle('visible');
-  });
-
+  host.append(veil, frame);
   document.documentElement.appendChild(host);
-  shadow.getElementById('leave').focus();
 
-  document.addEventListener('keydown', (event) => {
-    if (event.key !== 'Tab') return;
-    const buttons = Array.from(shadow.querySelectorAll('button:not([hidden])'));
-    const first = buttons[0];
-    const last = buttons[buttons.length - 1];
-    if (!first || !last) return;
+  window.addEventListener('message', (event) => {
+    if (event.source !== frame.contentWindow || event.data?.source !== 'virus-detector-overlay') return;
 
-    const active = shadow.activeElement;
-    if (event.shiftKey && active === first) {
-      event.preventDefault();
-      last.focus();
-    } else if (!event.shiftKey && active === last) {
-      event.preventDefault();
-      first.focus();
+    if (event.data.action === 'leave') {
+      window.location.replace('about:blank');
+      return;
+    }
+
+    if (event.data.action === 'official') {
+      try {
+        const url = new URL(correctUrl);
+        if (url.protocol === 'https:' || url.protocol === 'http:') {
+          window.location.assign(url.href);
+        }
+      } catch (e) {
+        // The official URL was unavailable or invalid.
+      }
     }
   }, true);
 }

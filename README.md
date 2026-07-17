@@ -97,6 +97,9 @@ VirusDetector/
 │   ├── popup.css                      # 弹窗样式（深色主题、SVG 图标系统）
 │   └── popup.js                       # 弹窗控制逻辑 —— 状态渲染、白名单操作
 ├── warning/
+│   ├── overlay.html                   # 页面风险覆盖层 UI
+│   ├── overlay.css                    # 覆盖层玻璃视觉与响应式布局
+│   ├── overlay.js                     # 覆盖层交互与父页面消息通信
 │   ├── warning.html                   # 旧版独立警告窗口（默认流程已由页面覆盖层取代）
 │   ├── warning.css                    # 旧版警告窗口样式
 │   ├── warning.js                     # 旧版警告窗口控制器

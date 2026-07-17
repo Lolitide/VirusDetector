@@ -54,6 +54,9 @@
         "warning/warning.html",
         "warning/warning.js",
         "warning/warning.css",
+        "warning/overlay.html",
+        "warning/overlay.js",
+        "warning/overlay.css",
         "warning/download-confirm.html",
         "warning/download-confirm.js",
         "warning/download-confirm.css"

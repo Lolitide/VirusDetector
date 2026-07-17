@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>安全风险警告</title>
+    <link rel="stylesheet" href="overlay.css" />
+  </head>
+  <body>
+    <main class="warning-shell" role="alertdialog" aria-modal="true" aria-labelledby="warning-title">
+      <header class="topbar">
+        <span class="mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M12 2 20 5v6c0 5-3.4 9.4-8 11-4.6-1.6-8-6-8-11V5l8-3Z" stroke="currentColor" stroke-width="1.8"/><path d="m8.5 12 2.2 2.2 4.8-5" stroke="currentColor" stroke-width="1.8"/></svg></span>
+        <span class="brand">银狐木马检测<small>VIRUS DETECTOR</small></span>
+        <span class="live"><i></i>风险已拦截</span>
+      </header>
+      <section class="content">
+        <div class="message">
+          <div class="eyebrow">风险警报</div>
+          <h1 id="warning-title">检测到网站<br /><em>存在高风险。</em></h1>
+          <p class="summary">该网站同时出现仿冒域名、可疑下载或备案异常信号。请不要输入个人信息，也不要下载任何文件。</p>
+          <div class="site"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M4 12h16M12 4a12 12 0 0 1 0 16M12 4a12 12 0 0 0 0 16"/></svg><div><span>当前浏览站点</span><strong id="domain"></strong></div></div>
+          <div class="details" id="details">风险评分综合了域名仿冒、下载来源、ICP备案、链接结构和注册时间等信号。覆盖层会持续阻止当前页面上的危险下载操作。</div>
+          <div class="actions"><button class="leave" id="leave">离开此网站</button><button class="official" id="official">前往官方网站</button><button class="details-button" id="details-button">查看检测原因</button></div>
+        </div>
+        <aside class="score-panel"><div class="score-label">SCAN SUMMARY</div><div class="ring"><div><strong id="score"></strong><span>综合风险评分</span></div></div><div class="signals"><div class="signal"><span>域名仿冒检测</span><b>已触发</b></div><div class="signal"><span>下载来源检查</span><b>已触发</b></div><div class="signal"><span>ICP备案信息</span><b>未发现</b></div></div></aside>
+      </section>
+      <footer class="footer">Virus Detector 正在保护此页面<span>本地分析，不上传页面正文</span></footer>
+    </main>
+    <script src="overlay.js"></script>
+  </body>
+</html>
