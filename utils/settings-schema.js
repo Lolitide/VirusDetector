@@ -235,8 +235,8 @@ export const SECTIONS = [
             mode: 'basic'
           },
           {
-            key: 'showWarningWindow', type: 'boolean', label: '警告弹窗',
-            desc: '检测到危险网站时弹出全屏警告窗口',
+            key: 'showWarningWindow', type: 'boolean', label: '页面风险覆盖层',
+            desc: '检测到危险网站时覆盖当前页面并阻止继续操作',
             mode: 'basic'
           },
           {
