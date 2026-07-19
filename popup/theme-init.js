@@ -6,6 +6,9 @@
 (function () {
   try {
     var t = localStorage.getItem('vt_theme') || 'dark';
+    if (t === 'auto') {
+      t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    }
     document.documentElement.setAttribute('data-theme', t);
   } catch (e) {
     document.documentElement.setAttribute('data-theme', 'dark');

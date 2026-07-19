@@ -42,6 +42,7 @@ class SettingsApp {
     this._renderSection(this._activeSection);
     this._bindEvents();
     this._applyModeToDom();
+    this._watchSystemTheme();
 
     console.log('[Settings] 设置页已初始化, schemaVersion:', SCHEMA_VERSION);
   }
@@ -55,7 +56,7 @@ class SettingsApp {
       // 合并：新键用默认值，已存储的键覆盖默认值
       this.settings = { ...SETTINGS_DEFAULTS, ...stored };
       // 同步 localStorage 主题镜像（确保后续页面加载无闪烁）
-      try { localStorage.setItem('vt_theme', this.settings.theme || 'dark'); } catch(e) {}
+      try { localStorage.setItem('vt_theme', this.settings.theme || 'dark'); } catch (e) { }
       // Schema 迁移检测
       if (stored._schemaVersion !== SCHEMA_VERSION) {
         console.log('[Settings] Schema 版本变更:', stored._schemaVersion, '→', SCHEMA_VERSION);
@@ -76,7 +77,7 @@ class SettingsApp {
     try {
       await chrome.storage.local.set({ [STORAGE_KEYS.GLOBAL_SETTINGS]: toStore });
       // 同步写入 localStorage 以便页面加载时无闪烁读取主题
-      try { localStorage.setItem('vt_theme', this.settings.theme || 'dark'); } catch(e) {}
+      try { localStorage.setItem('vt_theme', this.settings.theme || 'dark'); } catch (e) { }
       this._broadcastUpdate();
       console.log('[Settings] 已自动保存');
     } catch (e) {
@@ -198,23 +199,29 @@ class SettingsApp {
             </div>
           </div>`;
 
-      case 'theme':
+      case 'theme': {
+        const themeValue = value || 'dark';
+        const themes = [
+          { val: 'dark', label: '深色', icon: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>' },
+          { val: 'light', label: '浅色', icon: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>' },
+          { val: 'auto', label: '系统', icon: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>' }
+        ];
+        const segsHTML = themes.map(t =>
+          `<button type="button" class="theme-seg${t.val === themeValue ? ' active' : ''}" data-theme-val="${t.val}" title="${t.label}">${t.icon}</button>`
+        ).join('');
         return `
-          <div class="setting-row theme-setting-row" data-key="${setting.key}" data-mode="${setting.mode || 'basic'}">
+          <div class="setting-row" data-key="${setting.key}" data-mode="${setting.mode || 'basic'}">
             <div class="setting-info">
               <div class="setting-label">${setting.label}</div>
               <div class="setting-desc">${setting.desc}</div>
             </div>
             <div class="setting-control">
-              <label class="toggle theme-toggle">
-                <input type="checkbox" class="setting-input" data-key="${setting.key}" data-type="theme"
-                  ${value === 'light' ? 'checked' : ''}>
-                <span class="toggle-slider"></span>
-                <span class="theme-icon theme-icon-sun">☀️</span>
-                <span class="theme-icon theme-icon-moon">🌙</span>
-              </label>
+              <div class="theme-segmented" data-key="${setting.key}">
+                ${segsHTML}
+              </div>
             </div>
           </div>`;
+      }
 
       case 'preset':
         const presetValue = value || 'medium';
@@ -302,8 +309,6 @@ class SettingsApp {
 
       if (type === 'boolean') {
         input.checked = !!value;
-      } else if (type === 'theme') {
-        input.checked = value === 'light';
       } else if (type === 'number') {
         input.value = value;
       } else if (type === 'select') {
@@ -350,8 +355,21 @@ class SettingsApp {
 
     // click 事件委托
     app.addEventListener('click', (e) => {
-      const target = e.target.closest('.nav-item, [data-section], [data-preset], #import-btn, #export-btn, #reset-btn, .mode-segment, [data-action], #modal-cancel-btn, #modal-confirm-btn, #check-update-btn, #download-update-btn');
+      const target = e.target.closest('.nav-item, [data-section], [data-preset], #import-btn, #export-btn, #reset-btn, .mode-segment, [data-action], #modal-cancel-btn, #modal-confirm-btn, #check-update-btn, #download-update-btn, .theme-seg');
       if (!target) return;
+
+      if (target.matches('.theme-seg')) {
+        const themeVal = target.dataset.themeVal;
+        if (themeVal && themeVal !== this.settings.theme) {
+          target.parentElement.querySelectorAll('.theme-seg').forEach(s =>
+            s.classList.toggle('active', s.dataset.themeVal === themeVal)
+          );
+          this.settings.theme = themeVal;
+          this._applyTheme();
+          this._saveSettings();
+        }
+        return;
+      }
 
       if (target.matches('.nav-item') || target.dataset.section) {
         const sectionId = target.dataset.section || target.closest('.nav-item')?.dataset?.section;
@@ -526,7 +544,8 @@ class SettingsApp {
         value = input.value;
         break;
       case 'theme':
-        value = input.checked ? 'light' : 'dark';
+        // 主题切换由 .theme-seg 点击事件直接处理，此分支不会被触发
+        value = input.value || 'dark';
         break;
       case 'preset':
         value = input.value;
@@ -584,13 +603,13 @@ class SettingsApp {
   _setMode(mode) {
     if (this._mode === mode) return;
     this._mode = mode;
-    try { localStorage.setItem('vt_mode', mode); } catch(e) {}
+    try { localStorage.setItem('vt_mode', mode); } catch (e) { }
     // 切回基础模式时，若当前在高级专属分区则跳转到常规
     if (mode === 'basic') {
       const advancedOnly = ['thresholds', 'download', 'blacklist'];
       if (advancedOnly.includes(this._activeSection)) {
         this._activeSection = 'general';
-        try { localStorage.setItem('vt_activeSection', 'general'); } catch(e) {}
+        try { localStorage.setItem('vt_activeSection', 'general'); } catch (e) { }
       }
     }
     this._applyModeToDom();
@@ -635,7 +654,7 @@ class SettingsApp {
   _switchSection(sectionId) {
     this._closeDrawer();
     this._activeSection = sectionId;
-    try { localStorage.setItem('vt_activeSection', sectionId); } catch(e) {}
+    try { localStorage.setItem('vt_activeSection', sectionId); } catch (e) { }
     this._renderSection(sectionId);
     // 高亮侧栏
     document.querySelectorAll('.nav-item').forEach(el => {
@@ -749,7 +768,20 @@ class SettingsApp {
 
   _applyTheme() {
     const theme = this.settings.theme || SETTINGS_DEFAULTS.theme;
-    document.documentElement.dataset.theme = theme;
+    const resolved = theme === 'auto'
+      ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+      : theme;
+    document.documentElement.dataset.theme = resolved;
+  }
+
+  /** 系统配色变化时，若主题为 auto 则实时切换 */
+  _watchSystemTheme() {
+    const mql = window.matchMedia('(prefers-color-scheme: dark)');
+    mql.addEventListener('change', () => {
+      if (this.settings.theme === 'auto') {
+        this._applyTheme();
+      }
+    });
   }
 
   // ==================== 确认弹窗 ====================
@@ -1032,8 +1064,8 @@ class SettingsApp {
                   <div class="detail-label">来源页面</div>
                   <ul class="detail-sources">
                     ${(entry.sourcePages || []).slice(0, 5).map(sp =>
-                      `<li><a href="${this._escapeHtml(sp.pageUrl || '#')}" target="_blank" rel="noopener">${this._escapeHtml(sp.pageDomain || sp.pageUrl || '未知')}</a></li>`
-                    ).join('')}
+          `<li><a href="${this._escapeHtml(sp.pageUrl || '#')}" target="_blank" rel="noopener">${this._escapeHtml(sp.pageDomain || sp.pageUrl || '未知')}</a></li>`
+        ).join('')}
                     ${(entry.sourcePages || []).length > 5 ? `<li style="color:var(--text3)">...还有 ${entry.sourcePages.length - 5} 个来源</li>` : ''}
                   </ul>
                   ${entry.fileTypes && entry.fileTypes.length > 0 ? `

@@ -481,65 +481,39 @@ html, body {
   cursor: not-allowed;
 }
 
-/* ===== Theme Toggle (special sun/moon style) ===== */
-.theme-setting-row {
-  background: var(--bg);
+/* ===== Theme Segmented Control (dark / light / auto) ===== */
+.theme-segmented {
+  display: flex;
+  border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  margin: 4px 0 !important;
-  padding-left: 20px;
-  padding-right: 20px;
+  overflow: hidden;
 }
 
-.theme-toggle .toggle-slider {
-  background: #3a3a6c;
+.theme-seg {
+  padding: 7px 12px;
+  background: var(--bg);
+  border: none;
+  color: var(--text2);
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: inherit;
 }
 
-.theme-toggle input:checked + .toggle-slider {
-  background: #e8a840;
+.theme-seg:not(:last-child) {
+  border-right: 1px solid var(--border);
 }
 
-/* dark-mode knob */
-.theme-toggle .toggle-slider::before {
-  background: #1a1a2e;
-  box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+.theme-seg:hover {
+  background: var(--bg3);
+  color: var(--text);
 }
 
-/* light-mode knob */
-.theme-toggle input:checked + .toggle-slider::before {
-  background: #fff;
-  box-shadow: 0 1px 4px rgba(0,0,0,0.15);
-}
-
-/* ===== Theme Toggle Icons (sun / moon crossfade) ===== */
-.theme-icon {
-  position: absolute;
-  top: 50%;
-  transform: translateY(-50%);
-  font-size: 11px;
-  line-height: 1;
-  pointer-events: none;
-  transition: opacity 0.10s ease;
-}
-
-/* sun on left side of track */
-.theme-icon-sun {
-  left: 6px;
-  opacity: 0;
-}
-
-/* moon on right side of track */
-.theme-icon-moon {
-  right: 6px;
-  opacity: 1;
-}
-
-/* when checked (light mode): sun fades in, moon fades out */
-.theme-toggle input:checked ~ .theme-icon-sun {
-  opacity: 1;
-}
-
-.theme-toggle input:checked ~ .theme-icon-moon {
-  opacity: 0;
+.theme-seg.active {
+  background: var(--bg3);
+  color: var(--green);
 }
 
 /* ===== Preset Sensitivity Slider ===== */

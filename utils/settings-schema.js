@@ -225,8 +225,8 @@ export const SECTIONS = [
         mode: 'basic',
         settings: [
           {
-            key: 'theme', type: 'theme', label: '浅色模式',
-            desc: '切换浅色/深色界面主题（设置页和弹窗均生效）',
+            key: 'theme', type: 'theme', label: '界面主题',
+            desc: '切换深色/浅色界面主题，或跟随系统配色（设置页和弹窗均生效）',
             mode: 'basic'
           },
           {
@@ -328,9 +328,11 @@ export const SECTIONS = [
           { key: 'link_samePageThreshold', type: 'number', label: '同页链接阈值', desc: '≥此数量触发同页链接检测', min: 2, max: 50, step: 1, mode: 'advanced' },
           { key: 'link_duplicateThreshold', type: 'number', label: '重复链接阈值', desc: '≥此数量触发重复链接检测', min: 2, max: 20, step: 1, mode: 'advanced' },
           { key: 'link_deadLinkThreshold', type: 'number', label: '死链阈值', desc: '≥此数量触发死链检测', min: 0, max: 20, step: 1, mode: 'advanced' },
-          { key: 'checkDeadLinks', type: 'boolean', label: '死链主动检测',
+          {
+            key: 'checkDeadLinks', type: 'boolean', label: '死链主动检测',
             desc: '发送 HEAD 请求验证死链（关闭后仅统计不验证，不影响计分）',
-            mode: 'advanced' }
+            mode: 'advanced'
+          }
         ]
       }
     ]
@@ -728,6 +730,11 @@ export function validateSetting(key, value) {
       return num;
     }
     case 'string':
+      // 主题值校验：仅允许 dark / light / auto
+      if (key === 'theme') {
+        const validThemes = ['dark', 'light', 'auto'];
+        return validThemes.includes(value) ? value : def;
+      }
       // select 类型：验证是否在 options 中
       if (def === 'medium' || def === 'dark' || def === 'custom') {
         const setting = findSettingMeta(key);

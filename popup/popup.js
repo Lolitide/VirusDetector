@@ -573,19 +573,27 @@
 
   // ==================== 初始化 ====================
 
-  /** 从 storage 读取主题并立即应用 */
+  /** 从 storage 读取主题并立即应用，auto 模式通过 matchMedia 解析 */
   async function applyTheme() {
     try {
       const stored = await chrome.storage.local.get('global_settings');
       const settings = stored && stored.global_settings ? stored.global_settings : {};
       const theme = settings.theme || 'dark';
-      document.documentElement.setAttribute('data-theme', theme);
-      // 同步到 localStorage 以便下次加载无闪烁
+      const resolved = theme === 'auto'
+        ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+        : theme;
+      document.documentElement.setAttribute('data-theme', resolved);
+      // 同步到 localStorage 以便下次加载无闪烁（存储原始值，由 theme-init.js 解析）
       try { localStorage.setItem('vt_theme', theme); } catch (e) { }
     } catch (e) {
       document.documentElement.setAttribute('data-theme', 'dark');
     }
   }
+
+  // 系统配色变化时，若主题为 auto 则实时切换
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+    applyTheme();
+  });
 
   if (document.readyState === 'complete' || document.readyState === 'interactive') {
     applyTheme().then(() => { render(); checkUpdateBadge(); });
