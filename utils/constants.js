@@ -8,8 +8,12 @@
  */
 
 // ==================== 版本号（统一入口） ====================
-/** 当前扩展版本号，所有模块引用此常量，发版时仅需修改此处 + manifest.json + README */
-export const VERSION = '2.5.0';
+/**
+ * 当前扩展版本号，用于 User-Agent 与上报载荷等展示性用途。
+ * 注意：更新检测以 chrome.runtime.getManifest().version 为唯一真源，不依赖此常量；
+ * 发版时仍需同步修改此处 + manifest.json + README（本常量已与 manifest 脱节过一次，见 v2.5.1）。
+ */
+export const VERSION = '2.5.1';
 
 // ==================== 评分体系 ====================
 /** 触发警告的总分阈值（注入拦截 + 警告窗口 + 图标变红） */
@@ -166,12 +170,18 @@ export const EMOJI_DENSITY_THRESHOLD_LOW = 2.0;
 export const EMOJI_DENSITY_THRESHOLD_HIGH = 10.0;
 
 // 主流框架标记 — HTML源码字符串匹配用（content-script 使用此列表做全文搜索）
+// 覆盖主流 SPA 框架 + 常见静态站点生成器（避免对 Docusaurus/MkDocs/Hugo/Astro 等合法站误判"无框架"）
 export const FRAMEWORK_HTML_MARKERS = [
   'react', 'vue', 'angular', 'webpack', '__initial_state__',
-  '_next/', 'nuxt', 'svelte', 'jquery', 'bootstrap',
+  '_next/', 'next/', 'nuxt', 'svelte', 'jquery', 'bootstrap',
   'node_modules', '.jsx', '.tsx', 'data-v-', 'ng-version',
   '__vue__', '__react', 'redux', 'react-dom', 'vue-router',
-  'webpackjsonp', '__webpack_require__', '__nuxt', '__next'
+  'webpackjsonp', '__webpack_require__', '__nuxt', '__next',
+  // —— 静态站点生成器 / 文档框架 ——
+  'docusaurus', 'mkdocs', 'material-docs', 'mkdocs-material',
+  'hugo', '_astro', 'astro', 'gatsby', 'hexo', 'jekyll',
+  'nextra', 'vitepress', 'vuepress', 'docsify', 'sveltekit',
+  'remix', 'eleventy', 'pelican', 'gitbook', 'docusaurus-tag-manager'
 ];
 
 // ==================== 消息类型 ====================
@@ -197,7 +207,12 @@ export const MSG_TYPES = {
   GET_SETTINGS: 'GET_SETTINGS',
   UPDATE_SETTINGS: 'UPDATE_SETTINGS',
   BULK_UPDATE_WHITELIST: 'BULK_UPDATE_WHITELIST',
-  CHECK_UPDATE: 'CHECK_UPDATE'
+  CHECK_UPDATE: 'CHECK_UPDATE',
+  // 站点黑名单
+  ADD_SITE_BLACKLIST: 'ADD_SITE_BLACKLIST',
+  REMOVE_SITE_BLACKLIST: 'REMOVE_SITE_BLACKLIST',
+  GET_SITE_BLACKLIST: 'GET_SITE_BLACKLIST',
+  CLEAR_SITE_BLACKLIST: 'CLEAR_SITE_BLACKLIST'
 };
 
 // ==================== 存储键 ====================
@@ -207,6 +222,7 @@ export const STORAGE_KEYS = {
   SSL_CACHE: 'ssl_cache_',
   GLOBAL_SETTINGS: 'global_settings',
   WHITELIST: 'whitelist',
+  SITE_BLACKLIST: 'site_blacklist',
   DOWNLOAD_BLACKLIST: 'download_blacklist',
   PENDING_DOWNLOADS: 'pending_downloads',
   USER_REPORTS: 'user_reports',
@@ -221,11 +237,32 @@ export const CACHE_TTL = 24 * 60 * 60 * 1000;  // 24小时
 export const REPORT_API_URL = 'https://virus-detector-report.lolitide.workers.dev/api/report';
 
 // ==================== 更新检测 ====================
-/** GitHub Releases API（获取最新版本） */
+/**
+ * Cloudflare Worker 版本查询接口（主源）。
+ * Worker 服务端请求 GitHub API 并做边缘缓存，规避 api.github.com
+ * 按来源 IP 60次/小时 的未认证限额（共享出口 IP 下极易耗尽）。
+ */
+export const UPDATE_VERSION_API_URL = 'https://virus-detector-report.lolitide.workers.dev/api/version';
+
+/** GitHub Releases API（回退源，Worker 不可达时使用） */
 export const GITHUB_RELEASES_API_URL = 'https://api.github.com/repos/Lolitide/VirusDetector/releases/latest';
 
 /** GitHub Releases 页面（用户手动下载） */
 export const GITHUB_RELEASES_PAGE = 'https://github.com/Lolitide/VirusDetector/releases';
+
+/**
+ * 更新渠道：'auto' | 'manual' | 'store'
+ * - 'auto'：运行时根据 manifest.update_url 判定（商店安装会被商店注入该字段）
+ * - 'store'：跳过远程检查（浏览器商店自动更新）；上架打包时由构建脚本改写为此值
+ * - 'manual'：始终执行远程检查（GitHub zip / 开发者模式安装）
+ */
+export const UPDATE_CHANNEL = 'auto';
+
+/** 单个更新源的超时时间（毫秒） */
+export const UPDATE_CHECK_TIMEOUT_MS = 8000;
+
+/** 更新检查失败后的重试间隔（分钟），成功后恢复 24h 周期 */
+export const UPDATE_RETRY_DELAY_MINUTES = 60;
 
 // ==================== RDAP / Whois API 配置 ====================
 /** RDAP IANA 引导文件 URL（TLD → RDAP 服务器映射） */
@@ -272,6 +309,10 @@ export const DOWNLOAD_VALID_DAYS_THRESHOLD = 365;
 
 /** 下载链接域名注册天数阈值（天），低于此值视为新域名 */
 export const DOWNLOAD_CREATION_DAYS_THRESHOLD = 90;
+
+// ==================== 站点黑名单 ====================
+/** 站点域名命中黑名单时的基础高分（直接触发警告流程） */
+export const SCORE_SITE_BLACKLIST = 60;
 
 // ==================== 下载域名黑名单 ====================
 /** 下载域名命中黑名单时的额外加分 */
@@ -334,3 +375,64 @@ export const DOMAIN_AGE_BONUS_MIN_DAYS = 365;
 
 /** 域名年龄减分封顶天数：注册天数 ≥ 此值获得最大减分 */
 export const DOMAIN_AGE_BONUS_MAX_DAYS = 730;
+
+// ==================== ICP 备案查询 API 配置 ====================
+// 备案核验改为「按域名查询 API」（见 background/icp-api.js），端点集中于此避免硬编码。
+// 多源备援：主用 uapis（稳定），备援 apihz（公开接口，限流 10 次/分钟）。
+// 每个 provider：
+//   name        展示名
+//   enabled     是否启用
+//   needKey     是否需要 key（apihz 公开 demo 凭据默认可用，故为 false）
+//   rateLimitPerMin  每分钟最大请求数（0/缺省 = 不限）
+//   buildUrl(d, cfg) 拼 URL（cfg 为本 provider 对象，可读取 id/key 等）
+//   parse(data) 解析响应 → { hasIcp, icpNumber?, unitName? }
+export const ICP_API_CONFIG = {
+  cacheTtlMs: 24 * 60 * 60 * 1000, // 域名级缓存 24h
+  timeoutMs: 8000,                  // 单源超时
+  failCacheMs: 5 * 60 * 1000,       // 全源失败短时缓存，避免重试打爆接口
+  providers: [
+    {
+      name: 'uapis',
+      enabled: true,
+      needKey: false,
+      rateLimitPerMin: 0,
+      buildUrl: (domain) => `https://uapis.cn/api/v1/network/icp?domain=${encodeURIComponent(domain)}`,
+      // 响应成功：{"code":"200","serviceLicence":"京ICP证030173号","unitName":"...","msg":"query success"}
+      // 响应无记录：{"code":"200","serviceLicence":"查询失败","unitName":"查询失败","msg":"查询成功"}（autodesk.com/java.com 等外国站）
+      // 注意：uapis 查不到时仍返回 code:200，只是 serviceLicence="查询失败"；必须把"真实备案号"与失败文案区分开，
+      // 否则会把无备案的外国站误判 hasIcp:true，再经规则三步骤 1.5 直接放行，造成漏检。
+      parse: (data) => {
+        const lic = data && typeof data.serviceLicence === 'string' ? data.serviceLicence.trim() : '';
+        // 真实备案号必含「ICP备」或「ICP证」（如"京ICP备10005211号-8"可带分主体序号后缀）；
+        // "查询失败"/空 不含该标记，一律视为无备案
+        const isRealIcp = /ICP[备证]/.test(lic);
+        if (data && (data.code === 200 || data.code === '200') && isRealIcp) {
+          const unit = (data.unitName && data.unitName !== '查询失败') ? data.unitName : '';
+          return { hasIcp: true, icpNumber: lic, unitName: unit };
+        }
+        return { hasIcp: false };
+      }
+    },
+    {
+      name: 'apihz',
+      enabled: true,
+      needKey: false,        // 公开 demo 凭据默认可用；用户可在设置中覆盖 id/key
+      rateLimitPerMin: 10,   // 公开接口限制约 10 次/分钟
+      id: '88888888',
+      key: '88888888',
+      buildUrl: (domain, cfg) => `https://cn.apihz.cn/api/wangzhan/icp.php?id=${cfg.id}&key=${cfg.key}&domain=${encodeURIComponent(domain)}`,
+      // 响应成功：{"code":200,"icp":"蜀ICP备...号","unit":"..."}
+      // 响应无记录：{"code":400,"msg":"查询失败或没有备案。"}
+      // 同样仅当 icp 为真实备案号（含「ICP备/证」且以「号」结尾）才判有备案。
+      parse: (data) => {
+        const lic = data && typeof data.icp === 'string' ? data.icp.trim() : '';
+        const isRealIcp = /ICP[备证]/.test(lic);
+        if (data && (data.code === 200 || data.code === '200') && isRealIcp) {
+          const unit = (data.unit && data.unit !== '查询失败') ? data.unit : '';
+          return { hasIcp: true, icpNumber: lic, unitName: unit };
+        }
+        return { hasIcp: false };
+      }
+    }
+  ]
+};

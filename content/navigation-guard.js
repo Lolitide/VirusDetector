@@ -18,6 +18,23 @@
 (function () {
   'use strict';
 
+  var AUTH_HOST_PATTERN = /^(login|logon|signin|auth|oauth|account|accounts|identity|id|sso|secure|security|verify|verification|console)\./i;
+  var AUTH_PATH_PATTERN = /(?:^|[\/?#&=._-])(login|logon|logout|signin|sign-in|signout|sign-out|auth|oauth|authorize|sso|saml|2fa|mfa|otp|totp|challenge|verify|verification|webauthn|passkey|password|credential|credentials|session|callback|consent|recover|recovery|reset|device)(?:$|[\/?#&=._-])/i;
+  var DISABLE_GUARD_EVENT = 'virus-detector:disable-navigation-guard';
+
+  function isSensitiveAuthenticationUrl(url) {
+    try {
+      var parsed = new URL(url, window.location.href);
+      if (AUTH_HOST_PATTERN.test(parsed.hostname)) return true;
+      return AUTH_PATH_PATTERN.test(parsed.pathname + parsed.search + parsed.hash);
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // 登录、2FA 和控制台页面依赖原生导航对象，不在 MAIN world 中做任何 hook。
+  if (isSensitiveAuthenticationUrl(window.location.href)) return;
+
   // ==================== 危险扩展名列表 ====================
   // 与 utils/constants.js ARCHIVE_EXTENSIONS + EXECUTABLE_EXTENSIONS 保持同步
 
@@ -100,6 +117,8 @@
   // 保存原始的 location 对象引用
   var _origLocation = window.location;
   var _locationProxy = null;
+  var _origLocationSetter = null;
+  var _patchedLocationSetter = null;
 
   try {
     // 方法 A：使用 __proto__ 重写 location 对象的 href 属性
@@ -114,9 +133,9 @@
 
     if (window.__lookupSetter__ && window.__defineSetter__) {
       // 保存原始 setter
-      var _origLocationSetter = window.__lookupSetter__('location');
+      _origLocationSetter = window.__lookupSetter__('location');
       if (_origLocationSetter) {
-        window.__defineSetter__('location', function (val) {
+        _patchedLocationSetter = function (val) {
           if (isDangerousUrl(String(val))) {
             if (warnDangerousNavigation(String(val), 'location')) {
               _origLocationSetter.call(window, val);
@@ -125,7 +144,8 @@
           } else {
             _origLocationSetter.call(window, val);
           }
-        });
+        };
+        window.__defineSetter__('location', _patchedLocationSetter);
       }
     }
   } catch (e) {
@@ -137,7 +157,7 @@
 
   var _origOpen = window.open;
 
-  window.open = function (url, target, features) {
+  var _patchedOpen = function (url, target, features) {
     // 如果 URL 是危险文件 → 弹窗确认
     if (url && isDangerousUrl(String(url))) {
       if (!warnDangerousNavigation(String(url), 'window.open')) {
@@ -152,11 +172,29 @@
     }
     return null;
   };
+  window.open = _patchedOpen;
 
   // 保留原始 open 的引用（防止其他脚本覆盖后丢失）
   window.open.__virusDetector_original = _origOpen;
 
-  // ==================== 3. 标记已注入 ====================
+  // ==================== 3. 支持认证页动态卸载 ====================
+
+  function disableNavigationGuard() {
+    try {
+      if (window.open === _patchedOpen) window.open = _origOpen;
+      if (_origLocationSetter && _patchedLocationSetter && window.__lookupSetter__ &&
+          window.__lookupSetter__('location') === _patchedLocationSetter) {
+        window.__defineSetter__('location', _origLocationSetter);
+      }
+    } catch (e) { /* 恢复失败时保持静默 */ }
+
+    document.removeEventListener(DISABLE_GUARD_EVENT, disableNavigationGuard);
+    delete window.__virusDetectorNavGuard;
+  }
+
+  document.addEventListener(DISABLE_GUARD_EVENT, disableNavigationGuard);
+
+  // ==================== 4. 标记已注入 ====================
 
   window.__virusDetectorNavGuard = true;
 

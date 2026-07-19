@@ -58,6 +58,18 @@ import {
   DOWNLOAD_VALID_DAYS_THRESHOLD, DOWNLOAD_CREATION_DAYS_THRESHOLD
 } from '../utils/constants.js';
 
+// ==================== 品牌顶级域名（Brand TLD，ICANN 授权企业运营） ====================
+// 这些 TLD 由对应企业完全控制，其下所有域名均为该企业的官方资产，
+// 不存在仿冒可能，可安全跳过域名仿冒检测。
+const BRAND_TLDS = new Set([
+  'google',       // Google Registry
+  'goog',         // Google Registry（变体）
+  'microsoft',    // Microsoft Corporation
+  'apple',        // Apple Inc.
+  'amazon',       // Amazon Registry
+  'aws',          // Amazon Web Services
+]);
+
 // ==================== 模块级设置解析 ====================
 
 /** 当前活跃的 settings 对象（evaluateSync/evaluateDomainAgePart 调用前设置，调用后恢复） */
@@ -130,7 +142,7 @@ export class ScoringEngine {
     const existingScore = result1.score;
 
     // 规则三：ICP检测（可通过设置关闭）
-    const result3 = resolveSetting('rule3Enabled', true) ? this._evaluateRule3(domain, pageText, icpStrings, hasIcpGovLink, textSignals) : { score: 0, triggered: false, status: 'disabled', detail: '规则三已关闭', detailCN: 'ICP备案: 已关闭' };
+    const result3 = resolveSetting('rule3Enabled', true) ? this._evaluateRule3(domain, pageText, icpStrings, hasIcpGovLink, textSignals, ctx.icpApi, result1.triggered) : { score: 0, triggered: false, status: 'disabled', detail: '规则三已关闭', detailCN: 'ICP备案: 已关闭' };
 
     // 优化：域名检测和ICP检测均确认安全 → 跳过规则四/五（官方网站早期退出）
     const isConfirmedOfficial = (
@@ -227,7 +239,7 @@ export class ScoringEngine {
     const existingScore = result1.score;
 
     // 规则三：ICP检测（可通过设置关闭）
-    const result3 = resolveSetting('rule3Enabled', true) ? this._evaluateRule3(domain, pageText, icpStrings, hasIcpGovLink) : { score: 0, triggered: false, status: 'disabled', detail: '规则三已关闭', detailCN: 'ICP备案: 已关闭' };
+    const result3 = resolveSetting('rule3Enabled', true) ? this._evaluateRule3(domain, pageText, icpStrings, hasIcpGovLink, undefined, ctx.icpApi, result1.triggered) : { score: 0, triggered: false, status: 'disabled', detail: '规则三已关闭', detailCN: 'ICP备案: 已关闭' };
 
     // 官方站点早期退出
     const isConfirmedOfficial = (
@@ -328,7 +340,7 @@ export class ScoringEngine {
     const totalScore = preliminaryScore + domainAgeResult.score + ageBonusResult.score;
     const isSuspicious = totalScore >= resolveSetting('scoreThreshold', SCORE_THRESHOLD);
 
-    return {
+    const result = {
       totalScore,
       isSuspicious,
       riskLevel: isSuspicious ? RISK_LEVEL.WARNING : RISK_LEVEL.SAFE,
@@ -346,6 +358,7 @@ export class ScoringEngine {
       timestamp: Date.now()
     };
     _activeSettings = prevSettings;
+    return result;
   }
 
   /**
@@ -451,7 +464,7 @@ export class ScoringEngine {
     const totalScore = newPreliminaryScore + ageBonusResult.score;
     const isSuspicious = totalScore >= resolveSetting('scoreThreshold', SCORE_THRESHOLD);
 
-    return {
+    const result = {
       domainAgeResult,
       ageBonusResult,
       totalScore,
@@ -459,6 +472,7 @@ export class ScoringEngine {
       riskLevel: isSuspicious ? RISK_LEVEL.WARNING : RISK_LEVEL.SAFE
     };
     _activeSettings = prevSettings;
+    return result;
   }
 
   // ==================== 规则一：域名仿冒 (60分) ====================
@@ -476,6 +490,21 @@ export class ScoringEngine {
     if (domain.endsWith('.edu.cn')) {
       result.detail = '教育机构域名（.edu.cn），跳过域名仿冒检测';
       result.detailCN = '域名: 教育机构域名';
+      return result;
+    }
+
+    // ---- 政府站点域名前置检查 ----
+    // .gov.cn 由政府部门严格审批注册，攻击者无法注册，属高可信官方域，跳过仿冒检测
+    if (domain.endsWith('.gov.cn')) {
+      result.detail = '政府站点域名（.gov.cn），跳过域名仿冒检测';
+      result.detailCN = '域名: 政府站点';
+      return result;
+    }
+    // ---- 品牌顶级域名前置检查 ----
+    // Brand TLD 由对应企业完全控制，其下所有子域名均为官方资产，可安全跳过
+    if (BRAND_TLDS.has(domain.split('.').pop())) {
+      result.detail = '品牌顶级域名（.' + domain.split('.').pop() + '），跳过域名仿冒检测';
+      result.detailCN = '域名: 品牌顶级域名';
       return result;
     }
 
@@ -771,22 +800,45 @@ export class ScoringEngine {
   /**
    * 规则三：ICP备案检测（≤50分）
    *
-   * 判定链路：
-   *   1. 官方域名                          → 0  PASS
-   *   2a. ICP + 非黑名单 + 可点击政府链接    → 0  PASS（已核验）
-   *   2b. ICP + 缺政府链接 且 页有中文       → +50 TRIGGERED（虚假备案嫌疑）
-   *   2c. ICP + 缺政府链接 且 无中文         → +30 TRIGGERED（虚假备案嫌疑）
-   *   2d. ICP 号码在黑名单中                → 同 2b/2c（按有无中文判定）
-   *   3.  无 ICP + 豁免白名单               → 0  NEUTRAL
-   *   4.  无 ICP + 有中文                   → +50 TRIGGERED
-   *   5.  无 ICP + 无中文 + 非白名单         → +20 WARN
+ * 判定链路：
+ *   1. 官方域名                          → 0  PASS
+ *   1.5 备案查询 API 确认有备案            → 0  PASS（权威核验）
+ *   1.6 备案查询 API 确认【无备案】且页面展示备案号 → +50 TRIGGERED（盗用/伪造备案）
+ *   2a. ICP + 非黑名单 + 可点击政府链接    → 0  PASS（已核验）
+ *   2b. ICP + 缺政府链接 且 页有中文       → +50 TRIGGERED（虚假备案嫌疑）
+ *   2c. ICP + 缺政府链接 且 无中文         → +30 TRIGGERED（虚假备案嫌疑）
+ *   2d. ICP 号码在黑名单中                → 同 2b/2c（按有无中文判定）
+ *   3.  无 ICP + 豁免白名单               → 0  NEUTRAL
+ *   4.  无 ICP + 有中文                   → +50 TRIGGERED
+ *   5.  无 ICP + 无中文 + 非白名单         → +20 WARN
    */
-  static _evaluateRule3(domain, pageText, icpStrings, hasIcpGovLink, textSignals) {
+  static _evaluateRule3(domain, pageText, icpStrings, hasIcpGovLink, textSignals, icpApi, impersonating = false) {
     const result = {
       score: 0, triggered: false,
       detail: '', detailCN: '', icpFound: false, icpNumbers: [],
-      icpVerified: false, icpBlacklisted: false
+      icpVerified: false, icpBlacklisted: false,
+      icpStolen: false, icpAuthoritativeMissing: false
     };
+
+    // 1.7 备案查询 API 状态（显式记录，避免「查询失败 / 限流 / 禁用」被静默忽略）
+    //     icpApi 可能状态：
+    //       - null/undefined        ：未查询（接口关闭 / 未接入）→ 仅页面扫描
+    //       - queried:true          ：查询成功（hasIcp 决定有无备案）
+    //       - queried:false         ：查询失败 / 全部数据源限流 / 接口禁用 → 回退页面扫描
+    //     无论成功失败，本函数一律以「页面文本扫描」兜底；这里仅显式记录状态供排查、展示与日志。
+    //     必须放在所有提前 return 之前，确保每条分支都能记录 API 状态。
+    result.icpApiQueried = !!(icpApi && icpApi.queried);
+    result.icpApiHasIcp = !!(icpApi && icpApi.hasIcp);
+    result.icpApiService = (icpApi && icpApi.service) || null;
+    result.icpApiError = (icpApi && icpApi.error) || null;
+    result.icpApiStatus = !icpApi ? 'skipped'
+      : icpApi.queried ? 'ok'
+      : 'unavailable';
+    const icpApiUnavailable = result.icpApiStatus === 'unavailable';
+    // 当接口不可用时，在结论文案中追加「已回退页面扫描」提示，确保状态可见、可追溯。
+    const withApiNote = (detail, detailCN) => icpApiUnavailable
+      ? { detail: `${detail}（备案接口查询失败，已回退页面文本扫描）`, detailCN: `${detailCN}（接口失败·回退页面）` }
+      : { detail, detailCN };
 
     // 1. 官方域名本尊 → 跳过
     const official = DomainDatabase.findByDomain(domain);
@@ -797,7 +849,25 @@ export class ScoringEngine {
       return result;
     }
 
-    // 2. 搜索 ICP 备案号（含真实验证）
+    // 1.5 备案查询 API 核验：接口确认有备案 → 直接安全通过
+    // 修复「页面未展示备案号的合法国内站」被误判为无备案（见 issues #92 apihz.cn / #93 uapis.cn）
+    // 仅当 API 明确「有备案」时才改变判定；无备案/查询失败一律回退下方页面扫描逻辑。
+    if (icpApi && icpApi.queried && icpApi.hasIcp) {
+      result.status = 'pass';
+      result.icpFound = true;
+      result.icpVerified = true;
+      result.icpNumbers = icpApi.icpNumber ? [icpApi.icpNumber] : [];
+      result.detail = `ICP备案(接口核验): ${icpApi.icpNumber || '已备案'}${icpApi.unitName ? '（' + icpApi.unitName + '）' : ''}`;
+      result.detailCN = `ICP备案: 接口核验 (${icpApi.icpNumber || '已备案'})`;
+      return result;
+    }
+
+    // 1.6 权威「无备案」标记：备案查询 API 明确返回本域名在官方库【无备案】
+    //     （queried:true 且 hasIcp:false，区别于查询失败/限流）。
+    //     用于下方步骤二：当页面却展示备案号时，判定为盗用/伪造（见 app-4399.com.cn）。
+    const apiAuthoritativeNoIcp = !!(icpApi && icpApi.queried && !icpApi.hasIcp);
+
+    // 2. 搜索 ICP 备案号（含真实验证，作为 API 不可用时的兜底）
     const icpResult = IcpUtils.searchIcpNumber(pageText || '', icpStrings);
 
     if (icpResult.found) {
@@ -805,18 +875,55 @@ export class ScoringEngine {
       const hasBlacklisted = realNumbers.length < icpResult.numbers.length;
       result.icpBlacklisted = hasBlacklisted;
 
-      // 2a. 真实验证通过 → 完全安全
-      if (realNumbers.length > 0 && hasIcpGovLink) {
+      // 2a'. 盗用备案号检测（app-4399.com.cn 类钓鱼站核心修复）：
+      //     权威 API 确认「本域名在官方库无备案」（apiAuthoritativeNoIcp），
+      //     但页面却展示备案号（含真实可点击的政府核验链接），
+      //     说明该号码盗用自其他主体（如 app-4399.com.cn 盗用 4399 的「闽B2-20040099-1」）。
+      //     即使页面带政府核验链接，也无法改变「号码不归本站所有」的事实 → 按虚假备案重罚。
+      if (apiAuthoritativeNoIcp) {
+        result.icpFound = true;
+        if (realNumbers.length > 0) result.icpNumbers = realNumbers;
+        result.icpStolen = true;
+        result.icpAuthoritativeMissing = true;
+        result.score = resolveSetting('rule3_score', SCORE_RULE_3); // +50 — 盗用备案号
+        result.triggered = true;
+        const claimed = result.icpNumbers[0] || (icpResult.numbers[0] || '');
+        const src = icpApi.service ? `（权威源: ${icpApi.service}）` : '';
+        result.detail = `ICP备案号盗用/伪造（域名${domain}在官方库查无备案，但页面展示「${claimed}」）${src}，疑似钓鱼/仿冒站点`;
+        result.detailCN = `ICP备案: 盗用备案号（官方库查无此域名备案）`;
+        return result;
+      }
+
+      // 2a. 真实验证通过 → 完全安全（除非本域名正在仿冒该品牌：仿冒+展示备案号=盗用）
+      if (realNumbers.length > 0 && hasIcpGovLink && !impersonating) {
         result.status = 'pass';
         result.icpFound = true;
         result.icpVerified = true;
         result.icpNumbers = realNumbers;
-        result.detail = `检测到ICP备案号: ${realNumbers[0]}（已核验）`;
-        result.detailCN = `ICP备案: 检测到 (${realNumbers[0]})`;
+        Object.assign(result, withApiNote(
+          `检测到ICP备案号: ${realNumbers[0]}（已核验）`,
+          `ICP备案: 检测到 (${realNumbers[0]})`
+        ));
         return result;
       }
 
-      // 2b/2c/2d: ICP 存在但不可核验 → 可疑行为，直接加分
+      // 2a'. 仿冒品牌且页面展示备案号（含政府核验链接）→ 备案号盗用自被仿冒品牌
+      //     典型如 app-4399.com.cn：仿冒「4399」却展示 4399 的「闽B2-20040099-1」，
+      //     即使备案接口不可用（uapis 403 / apihz 限流）也能据此判定为钓鱼/仿冒。
+      if (impersonating && realNumbers.length > 0) {
+        result.icpFound = true;
+        if (realNumbers.length > 0) result.icpNumbers = realNumbers;
+        result.icpStolen = true;
+        result.icpAuthoritativeMissing = true;
+        result.score = resolveSetting('rule3_score', SCORE_RULE_3); // +50 — 仿冒+盗用备案号
+        result.triggered = true;
+        const claimed = result.icpNumbers[0] || (icpResult.numbers[0] || '');
+        result.detail = `仿冒品牌且盗用备案号（域名${domain}展示「${claimed}」应属被仿冒品牌，非本站所有），疑似钓鱼/仿冒站点`;
+        result.detailCN = `ICP备案: 仿冒品牌+盗用备案号`;
+        return result;
+      }
+
+      // 2b/2c/2d: ICP 存在但不可核验
       result.icpFound = true;
       if (realNumbers.length > 0) result.icpNumbers = realNumbers;
 
@@ -825,26 +932,44 @@ export class ScoringEngine {
       if (cjkResult.hasCJK) {
         result.score = SCORE_RULE_3;  // +50 — 中文站用虚假/未核验备案
         result.triggered = true;
-        let reason = result.icpBlacklisted ? '备案号疑似虚假' : '备案号缺少可点击核验链接';
-        result.detail = `ICP备案疑似虚假（域名${domain}，${reason}，页面含${cjkResult.cjkCount}个中文字符）`;
-        result.detailCN = `ICP备案: 虚假/未核验（${reason}）`;
-        return result;
-      } else {
-        result.score = resolveSetting('rule3_fakeScore', SCORE_RULE_3_FAKE);  // +30 — 无中文但显示了虚假备案号
-        result.triggered = true;
-        let reason = result.icpBlacklisted ? '备案号疑似虚假' : '备案号缺少可点击核验链接';
-        result.detail = `ICP备案疑似虚假（域名${domain}，${reason}，页面无中文内容）`;
-        result.detailCN = `ICP备案: 虚假/未核验（${reason}）`;
+        const reason = result.icpBlacklisted ? '备案号疑似虚假' : '备案号缺少可点击核验链接';
+        Object.assign(result, withApiNote(
+          `ICP备案疑似虚假（域名${domain}，${reason}，页面含${cjkResult.cjkCount}个中文字符）`,
+          `ICP备案: 虚假/未核验（${reason}）`
+        ));
         return result;
       }
+      // 纯英文/非中文站点：ICP 检查不适用（用户要求跳过），中性不罚
+      result.status = 'neutral';
+      Object.assign(result, withApiNote(
+        `页面为纯英文/非中文站点，ICP 备案检查不适用（域名${domain}）`,
+        'ICP备案: 非中文站点（不适用）'
+      ));
+      return result;
     }
 
     // 3. 未找到 ICP → 判定是否需要备案
     // 3a. 外国站点豁免白名单 → 确定不需要 ICP
     if (IcpUtils.isIcpExempt(domain)) {
       result.status = 'neutral';
-      result.detail = `外国站点（${domain}），ICP检查不适用`;
-      result.detailCN = 'ICP备案: 外国站点（不适用）';
+      Object.assign(result, withApiNote(
+        `外国站点（${domain}），ICP检查不适用`,
+        'ICP备案: 外国站点（不适用）'
+      ));
+      return result;
+    }
+
+    // 3a'. 中国域名（.cn 体系）受《互联网信息服务管理办法》ICP 备案制度管辖，必须有备案。
+    //     即使页面中英混排导致 CJK 占比偏低、被误判为「非中文」，只要未找到 ICP 即判违规（+50），
+    //     彻底避免 .com.cn / .net.cn 等中文钓鱼站借「非中文」中性跳过备案检查。
+    //     （gov.cn / edu.cn 等已在 3a 豁免白名单中提前返回，不在此分支。）
+    if (/(^|\.)cn$/i.test(domain)) {
+      result.score = SCORE_RULE_3;  // +50
+      result.triggered = true;
+      Object.assign(result, withApiNote(
+        `未检测到ICP备案号（中国域名 ${domain}，受 ICP 备案制度管辖）`,
+        'ICP备案: 未检测到备案号（中国域名）'
+      ));
       return result;
     }
 
@@ -853,16 +978,19 @@ export class ScoringEngine {
     if (cjkResult.hasCJK) {
       result.score = SCORE_RULE_3;  // +50
       result.triggered = true;
-      result.detail = `未检测到ICP备案号（域名${domain}，页面含${cjkResult.cjkCount}个中文字符，占比${(cjkResult.cjkRatio * 100).toFixed(1)}%）`;
-      result.detailCN = 'ICP备案: 未检测到备案号';
+      Object.assign(result, withApiNote(
+        `未检测到ICP备案号（域名${domain}，页面含${cjkResult.cjkCount}个中文字符，占比${(cjkResult.cjkRatio * 100).toFixed(1)}%）`,
+        'ICP备案: 未检测到备案号'
+      ));
       return result;
     }
 
-    // 3c. 不在白名单 + 无 CJK 内容 → 弱信号
-    result.score = 20;
-    result.status = 'warn';
-    result.detail = `无中文内容且非已知外国站点（域名${domain}），缺少ICP为弱信号`;
-    result.detailCN = 'ICP备案: 未检测到备案号（弱信号）';
+    // 3c. 不在白名单 + 无中文内容 → ICP 不适用（中性，跳过，不罚）
+    result.status = 'neutral';
+    Object.assign(result, withApiNote(
+      `无中文内容且非已知外国站点（域名${domain}），ICP 备案检查不适用`,
+      'ICP备案: 非中文站点（不适用）'
+    ));
 
     return result;
   }
@@ -907,15 +1035,19 @@ export class ScoringEngine {
       partAReasons.push(linkMetrics.deadLinks + '个死链/不存在子页面');
     }
 
-    // Part A-③：非线性计分 — 重复元素越多，得分对数增长（3个起计，30分封顶）
-    //           score = min(30, 8 * log2(n))，其中 n = 指向同一链接的不同元素数
+    // Part A-③：仅「指向跨域/下载链接」的大量重复才计分
+    // 正常站点（导航栏/目录/页脚/面包屑/分页）天生有大量元素指向同一【同域普通】链接，
+    // 这是网站结构常态而非钓鱼特征（见 wiki.cachyos.org 误报：149 个元素指向同一同域链接）。
+    // 真正的钓鱼信号是「全页大量元素跳转到同一恶意下载/跨域链接」。
     if (linkMetrics.hasDuplicateLinks && linkMetrics.duplicateLinks) {
       for (const dup of linkMetrics.duplicateLinks) {
         const n = dup.elementCount;
-        if (n >= 4) {
-          const dupScore = Math.floor(Math.min(30, 8 * Math.log2(n)));
+        const isSuspiciousTarget = dup.isCrossDomain || dup.isDownloadLink;
+        if (n >= 10 && isSuspiciousTarget) {
+          const dupScore = Math.floor(Math.min(20, 4 * Math.log2(n))); // 封顶 20（原 30）
           partAScore += dupScore;
-          partAReasons.push(n + '个不同元素指向同一链接');
+          const kind = dup.isDownloadLink ? '下载' : '跨域';
+          partAReasons.push(n + '个元素指向同一' + kind + '链接');
           // 附加分：该链接为下载链接
           if (dup.isDownloadLink) {
             partAScore += SCORE_RULE_4A_DOWNLOAD_LINK_BONUS;
@@ -1053,44 +1185,53 @@ export class ScoringEngine {
       const hasFramework = !!(pageMetrics.hasFrameworkMarkers);
       const suspiciousScriptRefCount = pageMetrics.suspiciousScriptRefCount || 0;
 
-      // 收集命中的信号
-      const signals = [];
+      // 收集命中的信号，区分「强信号」与「弱信号」
+      // 强信号：DOM 过少、异常 JS 引用路径 —— 高置信钓鱼/克隆站特征
+      // 弱信号：无主流框架、外部资源少 —— 轻量/自包含合法站（静态生成器、自托管）也常见，误报重灾区
+      const strong = [];
+      const weak = [];
 
-      // 信号1：DOM节点数过少
+      // 信号1：DOM节点数过少（强）
       if (domNodeCount > 0 && domNodeCount < AI_PAGE_THRESHOLDS.MIN_DOM_NODES) {
-        signals.push(`DOM节点仅${domNodeCount}个`);
+        strong.push(`DOM节点仅${domNodeCount}个`);
       }
 
-      // 信号2：无主流框架痕迹
+      // 信号2：无主流框架痕迹（弱，很多合法静态站用 Docusaurus/MkDocs/Hugo/Astro 等）
       if (!hasFramework) {
-        signals.push('未检测到主流框架');
+        weak.push('未检测到主流框架');
       }
 
-      // 信号3：外部资源过少
+      // 信号3：外部资源过少（弱，自包含/自托管站常见）
       if (!hasExternal || totalExternal < AI_PAGE_THRESHOLDS.MIN_EXTERNAL_RESOURCES) {
-        signals.push(`外部资源仅${totalExternal}个`);
+        weak.push(`外部资源仅${totalExternal}个`);
       }
 
-      // 信号4：克隆站常见的异常 JS 引用路径
+      // 信号4：克隆站常见的异常 JS 引用路径（强）
       if (suspiciousScriptRefCount > 0) {
-        signals.push(`异常JS引用${suspiciousScriptRefCount}个`);
+        strong.push(`异常JS引用${suspiciousScriptRefCount}个`);
       }
 
-      const signalCount = signals.length;
+      const strongCount = strong.length;
+      const weakCount = weak.length;
+      const signalCount = strongCount + weakCount;
+      const allSignals = strong.concat(weak);
 
-      // 组合判定
-      if (signalCount >= resolveSetting('code_signalsFull', AI_PAGE_THRESHOLDS.RULE_5_SIGNALS_FULL)) {
+      // 组合判定：仅当存在「强信号」时才罚，避免「无框架+资源少」两个弱信号（合法轻量站常态）误伤。
+      //   - 强信号 >= 2                         → +30 高度可疑
+      //   - 强信号 >= 1 且 总信号 >= 2          → +20 中度可疑
+      //   - 仅弱信号 / 无信号                    → 0 分（不处罚）
+      if (strongCount >= 2) {
         signalScore = resolveSetting('rule5_fullScore', SCORE_RULE_5);
         signalTriggered = true;
-        signalDetail = `代码工程质量差(${signalCount}个结构信号): ${signals.join('; ')}`;
-        signalDetailCN = `代码工程化: 高度可疑 (${signals.join(', ')})`;
-      } else if (signalCount >= resolveSetting('code_signalsPartial', AI_PAGE_THRESHOLDS.RULE_5_SIGNALS_PARTIAL)) {
+        signalDetail = `代码工程质量差(${signalCount}个结构信号): ${allSignals.join('; ')}`;
+        signalDetailCN = `代码工程化: 高度可疑 (${allSignals.join(', ')})`;
+      } else if (strongCount >= 1 && signalCount >= 2) {
         signalScore = resolveSetting('rule5_partialScore', SCORE_RULE_5_PARTIAL);
         signalTriggered = true;
-        signalDetail = `代码工程化弱信号(${signalCount}个结构信号): ${signals.join('; ')}`;
-        signalDetailCN = `代码工程化: 中度可疑 (${signals.join(', ')})`;
+        signalDetail = `代码工程化弱信号(${signalCount}个结构信号): ${allSignals.join('; ')}`;
+        signalDetailCN = `代码工程化: 中度可疑 (${allSignals.join(', ')})`;
       } else if (signalCount === 1) {
-        signalDetail = `代码工程化基本正常（仅${signals[0]}）`;
+        signalDetail = `代码工程化基本正常（仅${allSignals[0]}）`;
         signalDetailCN = '代码工程化: 基本正常';
       } else {
         signalDetail = '代码工程化检测通过（DOM节点' + domNodeCount + '，外部资源' + totalExternal + '个）';

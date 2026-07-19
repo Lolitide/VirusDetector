@@ -1,0 +1,15 @@
+{
+  "name": "virus-detector",
+  "version": "2.5.0",
+  "private": true,
+  "description": "Development tooling for the Virus Detector browser extension",
+  "scripts": {
+    "lint": "eslint --max-warnings=0 .",
+    "check:manifest": "node -e \"JSON.parse(require('node:fs').readFileSync('manifest.json', 'utf8'))\"",
+    "check": "npm run check:manifest && npm run lint"
+  },
+  "devDependencies": {
+    "eslint": "^9.31.0",
+    "globals": "^16.3.0"
+  }
+}

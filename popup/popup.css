@@ -12,6 +12,7 @@
   --blue: #2196f3;
   --blue-dark: #1565c0;
   --orange: #ff9800;
+  --orange-light: #fff3e0;
   --bg: #1a1a2e;
   --bg2: #16213e;
   --bg3: #0f3460;
@@ -22,7 +23,12 @@
   --bg-hover: #20203d;
   --wl-bg: #1a237e;
   --wl-color: #90caf9;
+  --wl-color-hover: #bbdefb;
   --wl-border: #42a5f5;
+  --bl-bg: #4a0000;
+  --bl-color: #ff8a80;
+  --bl-color-hover: #ffcdd2;
+  --bl-border: #f44336;
 }
 
 [data-theme="light"] {
@@ -34,9 +40,14 @@
   --text3: #999999;
   --border: #f1f1f1;
   --bg-hover: #f7f7f7;
-  --wl-bg: #e8eaf6;
+  --wl-bg: #f9f9f9;
   --wl-color: #283593;
+  --wl-color-hover: #5c6bc0;
   --wl-border: #5c6bc0;
+  --bl-bg: #fce4e4;
+  --bl-color: #b71c1c;
+  --bl-color-hover: #e53935;
+  --bl-border: #e53935;
   --green: #4CAF50;
   --green-light: #E8F5E9;
   --green-dark: #2E7D32;
@@ -46,6 +57,7 @@
   --blue: #1976D2;
   --blue-dark: #1565C0;
   --orange: #F57C00;
+  --orange-light: #fff3e0;
 }
 
 * {
@@ -121,6 +133,10 @@ body {
 
 #header.header-whitelist {
   background: linear-gradient(135deg, #0d47a1, #1565c0);
+}
+
+#header.header-blacklist {
+  background: linear-gradient(135deg, #b71c1c, #c62828);
 }
 
 .header-icon {
@@ -250,7 +266,8 @@ body {
 
 /* ===== Main Content ===== */
 #main-content {
-  flex: 1;
+  flex:1;
+  min-height: 250px;
   padding: 16px 20px;
   overflow-y: auto;
 }
@@ -267,7 +284,7 @@ body {
 
 #loading {
   text-align: center;
-  padding: 50px 0;
+  padding: 46px 0;
 }
 
 .spinner {
@@ -316,6 +333,10 @@ body {
 
 .score-display.whitelist {
   background: rgba(76, 175, 80, 0.08);
+}
+
+.score-display.blacklist {
+  background: rgba(244, 67, 54, 0.08);
 }
 
 /* ---- Score Main: icon + value horizontal layout ---- */
@@ -732,15 +753,16 @@ body {
   align-items: center;
   padding: 5px 5px 5px 10px;
   background: var(--bg2);
-  gap: 6.5px;
-  overflow: hidden;
+  gap: 5px;
+  overflow: visible;
+  z-index: 10;
 }
 
 .footer-btn {
   background: var(--bg);
   border: 2px solid var(--border);
   color: var(--text2);
-  padding: 10px 6px 10px 13px;
+  padding: 10px 19px;
   border-radius: 5px;
   font-size: 18px;
   cursor: pointer;
@@ -748,131 +770,83 @@ body {
   align-items: center;
   gap: 6px;
   white-space: nowrap;
-  overflow: hidden;
+  overflow: visible;
   flex-shrink: 1;
   min-width: fit-content;
-  transition:
-    background 0.2s,
-    color 0.2s,
-    border-color 0.2s;
   z-index: 3;
+  position: relative;
 }
 
 .footer-btn svg {
   flex-shrink: 0;
   width: 30px;
   height: 20px;
-  padding-left: 7px;
 }
 
-.tip-up {
+/* ===== Footer Button Hover Tip — 悬浮提示文字从按钮后上滑 ===== */
+.footer-btn::after {
+  content: attr(data-tip);
   position: absolute;
-  font-size: 17px;
+  bottom: calc(100% + 2px);
+  z-index: -1;
+  left: 50%;
+  transform: translateX(-50%) translateY(6px);
+  font-size: 15px;
+  font-weight: 700;
   letter-spacing: 1px;
-  line-height: 22px;
-  font-weight: bold;
-  top: 8px;
-  right: 57px;
-  z-index: 1;
-  opacity: 0.3;
-  transition: opacity 0.3s ease 0.06s;
-}
-
-.tip-down {
-  position: absolute;
-  font-size: 20px;
-  letter-spacing: 1px;
-  line-height: 22px;
-  font-weight: bold;
-  right: 33px;
-  bottom: 8px;
-  z-index: 1;
-  opacity: 0.4;
-  transition: opacity 0.3s ease 0.1s;
-}
-
-.tip-icon {
-  position: absolute;
-  font-size: 60px;
-  font-weight: bold;
-  bottom: -13px;
-  right: 10px;
-  z-index: 1;
-  opacity: 0.5;
-  transition: opacity 0.3s ease 0.14s;
-}
-/* ---- Button Label: hidden by default, slides out on hover ---- */
-.btn-label {
-  max-width: 0;
-  padding-right: 10px;
+  white-space: nowrap;
   opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+.footer-btn:hover::after {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+/* 各按钮提示文字颜色对应各自按钮颜色 */
+#report-false-btn::after { color: var(--orange); }
+#report-phish-btn::after { color: var(--red); }
+#whitelist-btn::after   { color: var(--wl-border); }
+#blacklist-btn::after   { color: var(--bl-border); }
+#refresh-btn::after     { color: var(--green); }
+
+
+/* ---- Button Label: always visible ---- */
+.btn-label {
+  padding-right: 10px;
   overflow: hidden;
   white-space: nowrap;
   display: inline-block;
-  transition:
-    max-width 0.35s cubic-bezier(0.4, 0, 0.2, 1),
-    opacity 0.2s ease 0.15s;
-}
-
-.footer-btn .mistake-btn {
-  transition:
-    max-width 0.35s cubic-bezier(0.4, 0, 0.2, 1),
-    opacity 0.1s ease;
-}
-.footer-btn:hover .btn-label {
-  max-width: 100px;
-  opacity: 1;
 }
 
 .footer-btn:hover {
-  z-index: 3;
   background: var(--bg-hover);
   color: var(--text);
 }
 
-#footer:hover #report-false-btn:not(:hover):not(:disabled) {
-  color: var(--text3);
-}
-#footer:hover #report-phish-btn:not(:hover):not(:disabled) {
-  color: var(--text3);
-}
-#footer:hover #whitelist-btn:not(:hover):not(:disabled) {
-  color: var(--text3);
-}
-#footer:hover #refresh-btn:not(:hover):not(:disabled) {
-  color: var(--text3);
-}
-
-#footer:hover .tip-up {
-  opacity: 0.4;
-}
-#footer:hover .tip-down {
-  opacity: 0.5;
-}
-#footer:hover .tip-icon {
-  opacity: 0.7;
-}
-
 .footer-btn:disabled {
   cursor: not-allowed;
+  opacity: 1;
 }
 
-.report-btn:hover {
-  border-color: var(--orange);
-  color: var(--orange);
-  background-color: #FFE5CE;
+.footer-btn.active:disabled {
+  /* 防止浏览器 disabled 默认灰化覆盖 active 颜色 */
+  opacity: 1;
+  -webkit-text-fill-color: currentColor;
 }
 
-.danger-btn:hover {
-  border-color: var(--red);
-  color: var(--red);
-  background-color: #FFE2E2;
+/* ---- SVG transitions ---- */
+
+.footer-btn.active svg {
+  transform: scale(1.15);
 }
 
-#refresh-btn:hover:not(:disabled) {
-  border-color: var(--green);
-  color: var(--green);
-  background-color: #E4FFE1;
+/* Refresh button: spin instead of scale on active */
+#refresh-btn.active svg {
+  transform: none;
+  animation: spin 0.8s linear infinite;
 }
 
 #refresh-btn:hover:not(:disabled) {
@@ -888,22 +862,87 @@ body {
   white-space: nowrap;
 }
 
-/* Whitelist Button */
-.whitelist-btn {
-  border-color: var(--border);
-  color: var(--text2);
+/* ===== Per-Button Hover & Active Colors ===== */
+
+/* Report False (orange) */
+#report-false-btn:hover:not(:disabled) {
+  background: var(--orange-light);
+  color: var(--orange);
+  border-color: var(--orange);
+}
+#report-false-btn.active {
+  background: var(--orange-light);
+  color: #e15306;
+  border-color: #e15306;
 }
 
+/* Report Phish (red) */
+#report-phish-btn:hover:not(:disabled) {
+  background: var(--red-light);
+  color: var(--red);
+  border-color: var(--red);
+}
+#report-phish-btn.active {
+  background: var(--red-light);
+  color: var(--red-dark);
+  border-color: var(--red-dark);
+}
+#report-phish-btn.confirming {
+  background: var(--red-light);
+  color: var(--red-dark);
+  border-color: var(--red-dark);
+  animation: pulse 1s infinite;
+}
+
+/* Whitelist (blue) */
 .whitelist-btn:hover:not(:disabled) {
   background: var(--wl-bg);
-  color: var(--wl-color);
+  color: var(--wl-color-hover);
   border-color: var(--wl-border);
 }
-
 .whitelist-btn.active {
   background: var(--wl-bg);
   color: var(--wl-color);
-  border-color: var(--wl-border);
+  border-color: var(--wl-color);
+}
+
+/* Blacklist (red/dark) */
+.blacklist-btn:hover:not(:disabled) {
+  background: var(--bl-bg);
+  color: var(--bl-color-hover);
+  border-color: var(--bl-border);
+}
+.blacklist-btn.active {
+  background: var(--bl-bg);
+  color: var(--bl-color);
+  border-color: var(--bl-color);
+}
+
+/* Refresh (green) */
+#refresh-btn:hover:not(:disabled) {
+  background: var(--green-light);
+  color: var(--green);
+  border-color: var(--green);
+}
+#refresh-btn.active {
+  background: var(--green-light);
+  color: var(--green-dark);
+  border-color: var(--green-dark);
+}
+
+/* ===== Dark Mode — 按钮 active/hover 背景改为深色 ===== */
+[data-theme="dark"] #report-false-btn:hover:not(:disabled),
+[data-theme="dark"] #report-false-btn.active {
+  background: rgba(255, 152, 0, 0.12);
+}
+[data-theme="dark"] #report-phish-btn:hover:not(:disabled),
+[data-theme="dark"] #report-phish-btn.active,
+[data-theme="dark"] #report-phish-btn.confirming {
+  background: rgba(244, 67, 54, 0.12);
+}
+[data-theme="dark"] #refresh-btn:hover:not(:disabled),
+[data-theme="dark"] #refresh-btn.active {
+  background: rgba(76, 175, 80, 0.12);
 }
 
 /* ===== Whitelist State ===== */
@@ -924,4 +963,25 @@ body {
   color: var(--text3);
   font-weight: 400;
   margin-top: 4px;
+}
+
+/* ===== Blacklist State ===== */
+.blacklist-hint {
+  text-align: center;
+  padding: 0 8px 8px 8px;
+}
+
+.blacklist-hint p {
+  font-size: 16px;
+  color: var(--red);
+  font-weight: 600;
+  margin: 0;
+}
+
+.blacklist-hint .blacklist-hint-sub {
+  font-size: 14px;
+  color: var(--text3);
+  font-weight: 400;
+  margin-top: 4px;
+  padding-bottom:4px;
 }

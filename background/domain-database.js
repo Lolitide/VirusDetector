@@ -51,11 +51,10 @@ export const SOFTWARE_CATEGORIES = {
   PAYMENT: '支付',
   DEVELOPER: '开发者工具',
   SYSTEM_TOOL: '系统工具',
+  SIMULATOR: '模拟器',
   GAME: '游戏平台',
   GAME_ACCELERATOR: '游戏加速器',
-  NEWS_INFO: '新闻/信息',
-  GOV_SERVICE: '政务服务',
-  EDUCATION: '高校/教育'
+  NEWS_INFO: '新闻/信息'
 };
 
 const DOMAIN_DATABASE = [
@@ -66,6 +65,14 @@ const DOMAIN_DATABASE = [
     correctUrl: 'https://www.360.cn',
     category: SOFTWARE_CATEGORIES.SECURITY,
     keywords: ['360', '安全卫士', '360safe', '360安全中心'],
+    isChineseBrand: true
+  },
+  {
+    name: '360沙箱云',
+    officialDomains: ['ata.360.net'],
+    correctUrl: 'https://ata.360.net',
+    category: SOFTWARE_CATEGORIES.SECURITY,
+    keywords: ['360沙箱云', '360sandbox', '360沙箱'],
     isChineseBrand: true
   },
   {
@@ -130,7 +137,7 @@ const DOMAIN_DATABASE = [
     officialDomains: ['ie.sogou.com'],
     correctUrl: 'https://ie.sogou.com',
     category: SOFTWARE_CATEGORIES.BROWSER,
-    keywords: ['搜狗浏览器', 'sogou浏览器', '搜狗高速浏览器', 'sogou'],
+    keywords: ['搜狗浏览器', 'sogou浏览器', '搜狗高速浏览器'],
     isChineseBrand: true
   },
   {
@@ -180,6 +187,14 @@ const DOMAIN_DATABASE = [
     category: SOFTWARE_CATEGORIES.BROWSER,
     keywords: ['Edge', 'Microsoft Edge', 'edge浏览器'],
     isChineseBrand: false
+  },
+  {
+    name: 'UC浏览器',
+    officialDomains: ['uc.cn', 'ucweb.com'],
+    correctUrl: 'https://www.uc.cn',
+    category: SOFTWARE_CATEGORIES.BROWSER,
+    keywords: ['UC浏览器', 'uc浏览器', 'UC', 'uc', 'ucweb', 'UC Browser'],
+    isChineseBrand: true
   },
 // ========== 即时通讯/社交 ==========
   {
@@ -244,14 +259,6 @@ const DOMAIN_DATABASE = [
     correctUrl: 'https://www.soulapp.cn',
     category: SOFTWARE_CATEGORIES.IM_SOCIAL,
     keywords: ['Soul', 'soulapp'],
-    isChineseBrand: true
-  },
-  {
-    name: 'UC浏览器',
-    officialDomains: ['uc.cn', 'ucweb.com'],
-    correctUrl: 'https://www.uc.cn',
-    category: SOFTWARE_CATEGORIES.BROWSER,
-    keywords: ['UC浏览器', 'uc浏览器', 'UC', 'uc', 'ucweb', 'UC Browser'],
     isChineseBrand: true
   },
 // ========== 输入法 ==========
@@ -326,6 +333,62 @@ const DOMAIN_DATABASE = [
     correctUrl: 'https://www.yozosoft.com',
     category: SOFTWARE_CATEGORIES.OFFICE,
     keywords: ['永中', 'yozo', '永中Office', '永中软件'],
+    isChineseBrand: true
+  },
+  {
+    name: '网易邮箱',
+    officialDomains: ['mail.163.com', 'mail.126.com', 'dashi.163.com'],
+    correctUrl: 'https://mail.163.com',
+    category: SOFTWARE_CATEGORIES.OFFICE,
+    keywords: ['网易邮箱大师', '163邮箱', '网易邮箱', '网易免费邮箱', '163邮箱大师'],
+    isChineseBrand: true
+  },
+  {
+    name: 'autodesk',
+    officialDomains: ['autodesk.com', 'autodesk.com.cn'],
+    correctUrl: 'https://www.autodesk.com',
+    category: SOFTWARE_CATEGORIES.OFFICE,
+    keywords: ['autodesk', 'Autodesk', '欧特克', '欧特克公司'],
+    isChineseBrand: false
+  },
+  {
+    name: '中望CAD',
+    officialDomains: ['zwsoft.com', 'zwsoft.cn'],
+    correctUrl: 'https://www.zwsoft.cn',
+    category: SOFTWARE_CATEGORIES.OFFICE,
+    keywords: ['中望CAD', '中望软件', 'zwsoft', 'ZWSOFT'],
+    isChineseBrand: true
+  },
+  {
+    name: 'blender',
+    officialDomains: ['blender.org'],
+    correctUrl: 'https://www.blender.org',
+    category: SOFTWARE_CATEGORIES.OFFICE,
+    keywords: ['blender', 'Blender', 'Blender Foundation'],
+    isChineseBrand: false
+  },
+  {
+    name: '网易有道',
+    officialDomains: ['youdao.com', 'dict.youdao.com', 'fanyi.youdao.com', 'top.youdao.com'],
+    correctUrl: 'https://www.youdao.com',
+    category: SOFTWARE_CATEGORIES.OFFICE,
+    keywords: ['有道', 'youdao', '网易有道', '有道词典', '有道翻译'],
+    isChineseBrand: true
+  },
+  {
+    name: '搜狗翻译',
+    officialDomains: ['fanyi.sogou.com'],
+    correctUrl: 'https://fanyi.sogou.com',
+    category: SOFTWARE_CATEGORIES.OFFICE,
+    keywords: ['搜狗翻译', 'sogou翻译'],
+    isChineseBrand: true
+  },
+  {
+    name: 'UU远程',
+    officialDomains: ['uuyc.163.com'],
+    correctUrl: 'https://uuyc.163.com',
+    category: SOFTWARE_CATEGORIES.OFFICE,
+    keywords: ['UU远程', 'uu远程', '网易uu', '网易uu远程'],
     isChineseBrand: true
   },
 // ========== 视频网站 ==========
@@ -420,7 +483,7 @@ const DOMAIN_DATABASE = [
   },
   {
     name: '汽水音乐',
-    officialDomains: ['qishui.com'],
+    officialDomains: ['qishui.com', 'qishui.douyin.com'],
     correctUrl: 'https://www.qishui.com',
     category: SOFTWARE_CATEGORIES.MUSIC,
     keywords: ['汽水音乐', '汽水', 'qishui', '抖音音乐'],
@@ -433,6 +496,14 @@ const DOMAIN_DATABASE = [
     category: SOFTWARE_CATEGORIES.MUSIC,
     keywords: ['咪咕音乐', '咪咕', 'migu', '中国移动音乐', 'migumusic'],
     isChineseBrand: true
+  },
+  {
+    name: '苹果音乐',
+    officialDomains: ['music.apple.com'],
+    correctUrl: 'https://music.apple.com',
+    category: SOFTWARE_CATEGORIES.MUSIC,
+    keywords: ['苹果音乐', 'apple music', 'Apple Music'],
+    isChineseBrand: false
   },
 // ========== 云存储/网盘 ==========
   {
@@ -534,7 +605,7 @@ const DOMAIN_DATABASE = [
   },
   {
     name: 'Kimi',
-    officialDomains: ['kimi.moonshot.cn', 'kimi.com', 'platform.kimi.com', 'api.moonshot.cn'],
+    officialDomains: ['moonshot.cn', 'kimi.com', 'platform.kimi.com', 'platform.kimi.ai', 'kimi.ai'],
     correctUrl: 'https://kimi.moonshot.cn',
     category: SOFTWARE_CATEGORIES.AI_CHAT,
     keywords: ['Kimi', 'kimi', 'moonshot', '月之暗面'],
@@ -550,7 +621,7 @@ const DOMAIN_DATABASE = [
   },
   {
     name: '智谱清言',
-    officialDomains: ['chatglm.cn', 'bigmodel.cn', 'open.bigmodel.cn'],
+    officialDomains: ['chatglm.cn', 'bigmodel.cn', 'open.bigmodel.cn', 'chat.z.ai'],
     correctUrl: 'https://chatglm.cn',
     category: SOFTWARE_CATEGORIES.AI_CHAT,
     keywords: ['智谱清言', 'chatglm', '智谱', 'GLM', '清言', 'bigmodel'],
@@ -729,12 +800,20 @@ const DOMAIN_DATABASE = [
     keywords: ['微信支付', 'weixin支付', 'wechatpay', 'wechat pay'],
     isChineseBrand: true
   },
-{
+  {
     name: '阿里云',
     officialDomains: ['aliyun.com', 'aliyuncs.com', 'alibabacloud.com'],
     correctUrl: 'https://www.aliyun.com',
     category: SOFTWARE_CATEGORIES.DEVELOPER,
     keywords: ['阿里云', 'aliyun', 'alibaba cloud'],
+    isChineseBrand: true
+  },
+  {
+    name: '腾讯',
+    officialDomains: ['tencent.com', 'tencent.com.cn', 'qq.com'],
+    correctUrl: 'https://www.tencent.com',
+    category: SOFTWARE_CATEGORIES.IM_SOCIAL,
+    keywords: ['腾讯', 'tencent', '腾讯公司', 'Tencent'],
     isChineseBrand: true
   },
   {
@@ -803,10 +882,18 @@ const DOMAIN_DATABASE = [
   },
   {
     name: 'Github',
-    officialDomains: ['github.com'],
+    officialDomains: ['github.com', 'github.blog', 'hellogithub.com'],
     correctUrl: 'https://www.github.com',
     category: SOFTWARE_CATEGORIES.DEVELOPER,
-    keywords: ['Github', 'GitHub'],
+    keywords: ['Github', 'GitHub', 'hellogithub', 'github'],
+    isChineseBrand: false
+  },
+  {
+    name: 'GitLab',
+    officialDomains: ['gitlab.com'],
+    correctUrl: 'https://gitlab.com',
+    category: SOFTWARE_CATEGORIES.DEVELOPER,
+    keywords: ['GitLab', 'gitlab'],
     isChineseBrand: false
   },
 // ========== 系统工具 ==========
@@ -875,7 +962,65 @@ const DOMAIN_DATABASE = [
     isChineseBrand: true
   },
 
+  // ========== 模拟器 ==========
+  {
+    name: '雷电模拟器',
+    officialDomains: ['ldmnq.com', 'leidian.co'],
+    correctUrl: 'https://www.ldmnq.com',
+    category: SOFTWARE_CATEGORIES.SIMULATOR,
+    keywords: ['雷电模拟器', '雷电', 'LDPlayer', 'ldplayer'],
+    isChineseBrand: true
+  },
+  {
+    name: '夜神模拟器',
+    officialDomains: ['yeshen.com', 'bignox.com'],
+    correctUrl: 'https://www.yeshen.com',
+    category: SOFTWARE_CATEGORIES.SIMULATOR,
+    keywords: ['夜神模拟器', '夜神', 'Nox', 'nox', 'NoxPlayer'],
+    isChineseBrand: true
+  },
+  {
+    name: '逍遥模拟器',
+    officialDomains: ['memuplay.com', 'xyaz.cn'],
+    correctUrl: 'https://www.memuplay.com',
+    category: SOFTWARE_CATEGORIES.SIMULATOR,
+    keywords: ['逍遥模拟器', '逍遥', 'memu'],
+    isChineseBrand: true
+  },
+  {
+    name: 'MuMu模拟器',
+    officialDomains: ['mumu.163.com'],
+    correctUrl: 'https://mumu.163.com',
+    category: SOFTWARE_CATEGORIES.SIMULATOR,
+    keywords: ['MuMu模拟器', 'MuMu', 'mumu', '网易模拟器'],
+    isChineseBrand: true
+  },
+  {
+    name: '腾讯手游助手',
+    officialDomains: ['syzs.qq.com'],
+    correctUrl: 'https://syzs.qq.com',
+    category: SOFTWARE_CATEGORIES.SIMULATOR,
+    keywords: ['腾讯手游助手', '手游助手', 'Tencent Gaming Buddy', '腾讯模拟器'],
+    isChineseBrand: true
+  },
+  {
+    name: '蓝叠模拟器',
+    officialDomains: ['bluestacks.cn', 'bluestacks.com'],
+    correctUrl: 'https://www.bluestacks.cn',
+    category: SOFTWARE_CATEGORIES.SIMULATOR,
+    keywords: ['蓝叠模拟器', '蓝叠', 'BlueStacks', 'bluestacks'],
+    isChineseBrand: true
+  },
+
   // ========== 游戏平台 ==========
+  {
+    name: '4399小游戏',
+    officialDomains: ['4399.com', '4399.cn'],
+    correctUrl: 'https://www.4399.com',
+    category: SOFTWARE_CATEGORIES.GAME,
+    keywords: ['4399', '4399小游戏', '4399游戏'],
+    isChineseBrand: true
+  },
   {
     name: 'WeGame',
     officialDomains: ['wegame.com.cn', 'wegame.com'],
@@ -886,7 +1031,7 @@ const DOMAIN_DATABASE = [
   },
   {
     name: 'Minecraft',
-    officialDomains: ['minecraft.net', 'minecraft.wiki', 'mojang.com'],
+    officialDomains: ['minecraft.net', 'minecraft.wiki', 'mojang.com', 'planetminecraft.com'],
     correctUrl: 'https://www.minecraft.net',
     category: SOFTWARE_CATEGORIES.GAME,
     keywords: ['Minecraft', 'minecraft', '我的世界', 'Mojang'],
@@ -894,10 +1039,10 @@ const DOMAIN_DATABASE = [
   },
   {
     name: '蒸汽平台',
-    officialDomains: ['steamchina.com', 'store.steamchina.com', 'help.steamchina.com'],
+    officialDomains: ['steamchina.com', 'steampowered.com', 'steamdb.info'],
     correctUrl: 'https://store.steamchina.com',
     category: SOFTWARE_CATEGORIES.GAME,
-    keywords: ['蒸汽平台', 'steamchina', '完美世界', 'Steam中国'],
+    keywords: ['蒸汽平台', 'steamchina', '完美世界', 'Steam中国', 'Steam', 'steam'],
     isChineseBrand: true
   },
   {
@@ -974,14 +1119,6 @@ const DOMAIN_DATABASE = [
     isChineseBrand: true
   },
   {
-    name: 'GoLink加速器',
-    officialDomains: ['golinkcn.com'],
-    correctUrl: 'https://www.golinkcn.com',
-    category: SOFTWARE_CATEGORIES.GAME_ACCELERATOR,
-    keywords: ['GoLink', 'golink', 'GoLink加速器', 'golinkcn'],
-    isChineseBrand: true
-  },
-  {
     name: '小黑盒加速器',
     officialDomains: ['xiaoheihe.cn', 'acc.xiaoheihe.cn'],
     correctUrl: 'https://acc.xiaoheihe.cn',
@@ -1013,6 +1150,22 @@ const DOMAIN_DATABASE = [
     keywords: ['AK加速器', 'akjsq', 'AK', 'akspeedy'],
     isChineseBrand: true
   },
+  {
+    name: 'mitce',
+    officialDomains: ['mitce.io', 'mitce.com'],
+    correctUrl: 'https://www.mitce.io',
+    category: SOFTWARE_CATEGORIES.GAME_ACCELERATOR,
+    keywords: ['mitce', 'mitce机场'],
+    isChineseBrand: false
+  },
+  {
+    name: 'clash',
+    officialDomains: ['clash.wiki', 'clash.guide','clashofficial.com', 'clashverge.dev', 'flclashx.com', 'clashsource.com', 'clash.la'],
+    correctUrl: 'https://github.com/clash-version/clash-download',
+    category: SOFTWARE_CATEGORIES.GAME_ACCELERATOR,
+    keywords: ['clash', 'clash verge', 'clash wiki', 'clash guide', 'clash官方', 'clash下载', 'flclashx', 'FlClash', 'Hiddify Next', 'ClashMi', 'ClashBox'],
+    isChineseBrand: false
+  },
 // ========== 新闻/信息 ==========
   {
     name: '今日头条',
@@ -1037,6 +1190,14 @@ const DOMAIN_DATABASE = [
     category: SOFTWARE_CATEGORIES.NEWS_INFO,
     keywords: ['知乎', 'zhihu'],
     isChineseBrand: true
+  },
+  {
+    name: 'msn',
+    officialDomains: ['msn.com','msn.cn'],
+    correctUrl: 'https://www.msn.com',
+    category: SOFTWARE_CATEGORIES.NEWS_INFO,
+    keywords: ['msn', 'MSN'],
+    isChineseBrand: false
   }
 ];
 
@@ -1074,6 +1235,22 @@ function _levenshtein(a, b) {
     }
   }
   return m[b.length][a.length];
+}
+
+/** 最长公共前缀长度 */
+function longestCommonPrefix(a, b) {
+  const n = Math.min(a.length, b.length);
+  let i = 0;
+  while (i < n && a[i] === b[i]) i++;
+  return i;
+}
+
+/** 最长公共后缀长度 */
+function longestCommonSuffix(a, b) {
+  const n = Math.min(a.length, b.length);
+  let i = 0;
+  while (i < n && a[a.length - 1 - i] === b[b.length - 1 - i]) i++;
+  return i;
 }
 
 // ==================== detectSpoof 预处理 ====================
@@ -1174,6 +1351,14 @@ export class DomainDatabase {
     // 1. 输入规范化：去 www + 小写
     const normalized = hostname.replace(/^www\./i, '').toLowerCase();
 
+    // 1.5 官方域名守卫：若当前域名本身就是官方域名（或其子域名），
+    // 则直接返回 null，避免将官方网站误判为仿冒。
+    // 此检查覆盖 _evaluateRule1 中用 mainDomain（注册域）查 findByDomain
+    // 但完整 hostname 是子域名官方域的场景。
+    if (this.findByDomain(normalized)) {
+      return null;
+    }
+
     /**
      * 对一组 labels/segments 执行规则 A/B/C，任一命中即返回结果。
      * @param {string[]} labels       标签数组
@@ -1268,12 +1453,22 @@ export class DomainDatabase {
     }
 
     // 5. 规则 D：约束编辑距离（仅 kw >= 6，dist 1-2，lenDiff ≤ 2）
+    //    安全护栏：避免把「真实品牌域名」或「两个无关品牌词」误判为仿冒。
+    //      (a) 关键词含中文时取其纯 ASCII 核心：若输入标签即等于该核心（如 tencent.com
+    //          命中关键词"tencent云"），属真实品牌而非仿冒 → 跳过。
+    //      (b) 要求标签与关键词存在≥3字符的连续公共前缀或后缀，确保是"同一词的错别字"
+    //          而非两个不同品牌词（如 youdao 与 doubao 仅公共后缀"ao"=2 字符，应判为不同品牌）。
     for (const kw of sortedKeywords) {
       if (kw.length < 6) continue;
+      const kwAscii = kw.replace(/[一-鿿]/g, '');
       for (const label of labels) {
         if (Math.abs(label.length - kw.length) > 2) continue;
+        if (kwAscii && label === kwAscii) continue; // (a) 真实品牌核心，非仿冒
         const dist = _levenshtein(label, kw);
         if (dist >= 1 && dist <= 2) {
+          const lcp = longestCommonPrefix(label, kw);
+          const lcs = longestCommonSuffix(label, kw);
+          if (Math.max(lcp, lcs) < 3) continue; // (b) 两个不同品牌词，跳过
           const entry = keywordToEntries.get(kw)[0];
           return {
             entry,

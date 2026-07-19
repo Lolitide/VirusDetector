@@ -1,7 +1,9 @@
 /**
- * Virus Detector — 用户上报 → GitHub Issue 代理
+ * Virus Detector — 用户上报 → GitHub Issue 代理 + 版本查询代理
  *
- * Cloudflare Worker：接收扩展的用户上报请求，代理创建 GitHub Issue。
+ * Cloudflare Worker：
+ *   1. 接收扩展的用户上报请求，代理创建 GitHub Issue。
+ *   2. 代理查询 GitHub 最新 Release，供扩展做更新检测。
  * GitHub PAT 仅存储在 Worker 环境变量中，不进入扩展代码。
  *
  * 部署方式：
@@ -15,12 +17,22 @@
  *   Body: { reportType, domain, score, version, timestamp, note, ruleResults, url }
  *   Response: { success: true, issueUrl: "https://github.com/.../issues/123" }
  *
+ *   GET /api/version
+ *   Response: { version, releaseUrl, releaseNotes, publishedAt, checkedAt }
+ *   说明：边缘缓存 1 小时 + ETag 条件请求，规避 api.github.com 按来源 IP
+ *         60次/小时 的未认证限额（扩展用户常处于共享出口 IP 下，直连极易 403）。
+ *
  * @module report-issue
  */
 
 // ---- 配置 ----
 const GITHUB_REPO_OWNER = 'Lolitide';
 const GITHUB_REPO_NAME = 'VirusDetector';
+const GITHUB_RELEASES_API = `https://api.github.com/repos/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/releases/latest`;
+
+// /api/version 边缘缓存：固定 key + 1 小时 TTL（上游请求量与用户规模无关）
+const VERSION_CACHE_KEY = 'https://virus-detector.internal/cache/api-version';
+const VERSION_CACHE_TTL_MS = 60 * 60 * 1000;
 
 // ---- Label 映射 ----
 const LABEL_MAP = {
@@ -43,11 +55,128 @@ function handleOptions() {
     status: 204,
     headers: {
       'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'POST, OPTIONS',
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
       'Access-Control-Allow-Headers': 'Content-Type',
       'Access-Control-Max-Age': '86400'
     }
   });
+}
+
+// ---- GET /api/version：最新 Release 版本信息 ----
+
+/** 构造版本信息响应；stale=true 表示这是上游失败后的过期缓存兜底 */
+function versionResponse(body, stale) {
+  return new Response(body, {
+    status: 200,
+    headers: {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*',
+      'Cache-Control': 'no-store',
+      ...(stale ? { 'x-stale': '1' } : {})
+    }
+  });
+}
+
+function versionErrorResponse(status, message) {
+  return new Response(JSON.stringify({ error: message }), {
+    status,
+    headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+  });
+}
+
+/** 写入边缘缓存（记录抓取时间与 GitHub ETag）并返回响应 */
+function cacheAndRespond(ctx, cache, body, etag) {
+  // 注意：存入 Cache API 的响应不能带 Cache-Control: no-store（Cloudflare 会拒绝写入），
+  // 因此缓存副本与返回给客户端的响应分别构造。
+  const cacheHeaders = {
+    'Content-Type': 'application/json',
+    'x-cached-at': String(Date.now())
+  };
+  if (etag) cacheHeaders['x-gh-etag'] = etag;
+  ctx.waitUntil(cache.put(VERSION_CACHE_KEY, new Response(body, { status: 200, headers: cacheHeaders })));
+
+  return new Response(body, {
+    status: 200,
+    headers: {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*',
+      'Cache-Control': 'no-store'
+    }
+  });
+}
+
+/**
+ * GET /api/version — 返回最新 Release 的归一化版本信息。
+ *
+ * 稳定性设计：
+ * - 边缘缓存 1 小时：GitHub 上游请求量与用户规模无关
+ * - ETag 条件请求：内容未变时 GitHub 返回 304，不占用速率限额
+ * - 上游失败时回退到过期缓存（stale）：宁可返回稍旧的数据也不报错
+ * - 若配置了 GITHUB_TOKEN 则带认证请求（5000次/小时），无 token 也可工作
+ */
+async function handleVersion(ctx) {
+  const cache = caches.default;
+
+  // 读取缓存（body 只能消费一次，先取出文本与元数据）
+  let cachedBody = null;
+  let cachedEtag = null;
+  let cachedAt = 0;
+  const cached = await cache.match(VERSION_CACHE_KEY);
+  if (cached) {
+    cachedBody = await cached.text();
+    cachedEtag = cached.headers.get('x-gh-etag') || null;
+    cachedAt = Number(cached.headers.get('x-cached-at') || 0);
+    if (Date.now() - cachedAt < VERSION_CACHE_TTL_MS) {
+      return versionResponse(cachedBody, false);
+    }
+  }
+
+  // 缓存过期或不存在，刷新上游
+  const headers = {
+    'Accept': 'application/vnd.github+json',
+    'User-Agent': 'VirusDetector-Version-Check/1.0'
+  };
+  const token = globalThis.GITHUB_TOKEN;
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  if (cachedEtag) headers['If-None-Match'] = cachedEtag;
+
+  let resp;
+  try {
+    resp = await fetch(GITHUB_RELEASES_API, { headers });
+  } catch (e) {
+    console.error(`[Version] GitHub 请求异常: ${e.message}`);
+    if (cachedBody) return versionResponse(cachedBody, true);
+    return versionErrorResponse(502, `GitHub 请求失败: ${e.message}`);
+  }
+
+  // 内容未变：仅刷新缓存时间戳
+  if (resp.status === 304 && cachedBody) {
+    return cacheAndRespond(ctx, cache, cachedBody, cachedEtag);
+  }
+
+  if (!resp.ok) {
+    console.error(`[Version] GitHub 返回 ${resp.status}`);
+    if (cachedBody) return versionResponse(cachedBody, true);
+    return versionErrorResponse(502, `GitHub API 返回 ${resp.status}`);
+  }
+
+  try {
+    const release = await resp.json();
+    const version = String(release.tag_name || '').replace(/^v/i, '');
+    if (!version) throw new Error('Release 缺少 tag_name');
+    const body = JSON.stringify({
+      version,
+      releaseUrl: release.html_url || `https://github.com/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/releases`,
+      releaseNotes: String(release.body || '').substring(0, 2000),
+      publishedAt: release.published_at || null,
+      checkedAt: new Date().toISOString()
+    });
+    return cacheAndRespond(ctx, cache, body, resp.headers.get('ETag'));
+  } catch (e) {
+    console.error(`[Version] Release 数据解析失败: ${e.message}`);
+    if (cachedBody) return versionResponse(cachedBody, true);
+    return versionErrorResponse(502, `Release 数据解析失败: ${e.message}`);
+  }
 }
 
 // ---- 域名校验 ----
@@ -226,6 +355,12 @@ export default {
     // 路由
     if (url.pathname === '/api/report') {
       return handleReport(request);
+    }
+    if (url.pathname === '/api/version') {
+      if (request.method !== 'GET') {
+        return versionErrorResponse(405, '仅支持 GET 请求');
+      }
+      return handleVersion(ctx);
     }
 
     // 404

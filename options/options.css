@@ -638,6 +638,31 @@ html, body {
   width: 110px;
 }
 
+/* ===== Text input (apihz credentials etc.) ===== */
+.text-input {
+  width: 220px;
+  max-width: 100%;
+  padding: 7px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 13px;
+  font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+  transition: border-color var(--transition);
+}
+
+.text-input:focus {
+  border-color: var(--blue);
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(33, 150, 243, 0.15);
+}
+
+.text-input:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 /* ===== Select ===== */
 select {
   padding: 7px 30px 7px 10px;
@@ -1156,6 +1181,33 @@ select:focus {
 
 .list-actions .file-input-hidden {
   display: none;
+}
+
+/* ===== List Mode Tabs (站点黑名单 / 下载黑名单) ===== */
+.list-mode-tabs {
+  display: flex;
+  gap: 0;
+  margin-bottom: 16px;
+  border-bottom: 2px solid var(--border);
+}
+.list-mode-tab {
+  padding: 8px 20px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text2);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  cursor: pointer;
+  transition: color .2s, border-color .2s;
+}
+.list-mode-tab:hover {
+  color: var(--text1);
+}
+.list-mode-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
 }
 
 /* ===== Blacklist Table ===== */

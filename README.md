@@ -3,7 +3,7 @@
 > Chrome/Edge 浏览器扩展，实时检测银狐木马（Silver Fox Trojan）钓鱼与仿冒网站。
 
 [![Manifest](https://img.shields.io/badge/Manifest-V3-blue)](https://developer.chrome.com/docs/extensions/mv3/)
-[![Version](https://img.shields.io/badge/Version-2.5.0-orange)](https://github.com)
+[![Version](https://img.shields.io/badge/Version-2.5.1-orange)](https://github.com)
 
 ---
 
@@ -33,6 +33,7 @@
 - **下载拦截注入** — ≥100 分时注入页面级拦截：精准匹配已知压缩包链接 + 视觉禁用下载按钮 + MutationObserver 动态监控
 - **下载域名黑名单** — 用户拦截的下载域名跨站免疫，90 天自动清理，500 条容量上限
 - **非压缩包检测开关** — 预留设置页接入，可控制是否拦截 `.exe` `.msi` 等可执行文件（默认关闭）
+- **更新检测** — 经 Cloudflare Worker 代理查询 GitHub Releases（边缘缓存 + ETag 条件请求，规避 GitHub API 按来源 IP 的速率限制），GitHub API 直连作为回退源；商店渠道安装自动关闭检查，由浏览器商店自动更新
 - **阈值分层** — ≥80 分激活下载确认弹窗，≥100 分激活完整防护（注入拦截 + 警告窗口 + 图标变红）
 - **警告弹窗** — 独立窗口展示风险详情，支持一键跳转官方网站并关闭危险页面
 
