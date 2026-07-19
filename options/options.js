@@ -1317,10 +1317,8 @@ class SettingsApp {
             <div class="about-row"><span class="about-label">上次检查</span><span class="about-value">${timeAgo}</span></div>
             ${failedNote}
           </div>`;
-        if (downloadBtn && info.releaseUrl) {
-          downloadBtn.href = info.releaseUrl;
-          downloadBtn.style.display = 'inline-flex';
-        }
+        // 替换检查更新按钮为绿色前往下载
+        if (info.releaseUrl) this._swapToDownloadBtn(info.releaseUrl);
       } else {
         statusEl.innerHTML = `
           <div class="update-status up-to-date">
@@ -1333,16 +1331,43 @@ class SettingsApp {
             <div class="about-row"><span class="about-label">上次检查</span><span class="about-value">${timeAgo}</span></div>
             ${failedNote}
           </div>`;
-        if (downloadBtn) downloadBtn.style.display = 'none';
+        this._restoreCheckBtn();
       }
     } catch (e) {
       statusEl.innerHTML = `<div class="update-status pending">无法加载更新信息</div>`;
     }
   }
 
+  /** 将检查更新按钮替换为绿色前往下载链接 */
+  _swapToDownloadBtn(url) {
+    const oldBtn = document.getElementById('check-update-btn');
+    if (!oldBtn) return;
+    const a = document.createElement('a');
+    a.id = 'download-update-btn';
+    a.className = 'btn btn-primary';
+    a.href = url;
+    a.target = '_blank';
+    a.rel = 'noopener';
+    a.innerHTML = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="vertical-align:-2px;margin-right:3px;"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>前往下载`;
+    oldBtn.replaceWith(a);
+  }
+
+  /** 恢复为检查更新按钮（如果已被替换） */
+  _restoreCheckBtn() {
+    const dlBtn = document.getElementById('download-update-btn');
+    if (!dlBtn) return;
+    const btn = document.createElement('button');
+    btn.id = 'check-update-btn';
+    btn.className = 'btn';
+    btn.innerHTML = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="vertical-align:-2px;margin-right:3px;"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>检查更新`;
+    dlBtn.replaceWith(btn);
+  }
+
   async _onCheckUpdate() {
     if (this._getUpdateChannel() === 'store') return; // 商店渠道由浏览器自动更新
     const statusEl = document.getElementById('update-status');
+    // 先恢复为检查按钮（可能之前已被替换为下载链接）
+    this._restoreCheckBtn();
     const btn = document.getElementById('check-update-btn');
     if (statusEl) statusEl.innerHTML = `<div class="update-status pending">
       <div class="spinner" style="width:16px;height:16px;border-width:2px;margin:0 8px 0 0;display:inline-block;vertical-align:middle;"></div>
@@ -1367,7 +1392,8 @@ class SettingsApp {
           <div style="font-size:12px;color:var(--text2);margin-top:4px;">${this._escapeHtml(e.message)}</div>
         </div>`;
     } finally {
-      if (btn) btn.disabled = false;
+      const checkBtn = document.getElementById('check-update-btn');
+      if (checkBtn) checkBtn.disabled = false;
     }
   }
 

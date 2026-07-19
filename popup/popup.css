@@ -849,6 +849,11 @@ body {
   animation: spin 0.8s linear infinite;
 }
 
+#refresh-btn:hover:not(:disabled) {
+  border-color: var(--green);
+  color: var(--green);
+}
+
 .footer-version {
   font-size: 11px;
   color: var(--text3);
