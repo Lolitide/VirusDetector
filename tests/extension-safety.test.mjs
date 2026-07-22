@@ -11,6 +11,7 @@ const siteAccessManager = readFileSync(new URL('../background/site-access-manage
 const warningHtml = readFileSync(new URL('../warning/warning.html', import.meta.url), 'utf8');
 const warningCss = readFileSync(new URL('../warning/warning.css', import.meta.url), 'utf8');
 const warningScript = readFileSync(new URL('../warning/warning.js', import.meta.url), 'utf8');
+const reportScript = readFileSync(new URL('../warning/report.js', import.meta.url), 'utf8');
 const themeInitScript = readFileSync(new URL('../popup/theme-init.js', import.meta.url), 'utf8');
 
 function sourceBetween(source, startMarker, endMarker) {
@@ -175,7 +176,9 @@ test('known threats are checked before navigation without inventing page evidenc
   assert.match(preflight, /SiteAccessManager\.isBlacklisted\s*\(/);
   assert.match(preflight, /CacheManager\.get\s*\(/);
   assert.match(preflight, /cached\s*&&\s*cached\.isMalicious/);
-  assert.match(preflight, /openWarningPage\(tabId,\s*tabState,\s*['"]preflight['"]\)/);
+  assert.match(preflight, /navigation\.committed/);
+  assert.match(preflight, /openWarningPage\(tabId,\s*tabState,\s*stage\)/);
+  assert.match(preflight, /isCurrentNavigation/);
   assert.doesNotMatch(preflight, /ScoringEngine\.evaluate/);
 });
 
@@ -194,7 +197,8 @@ test('high-risk responses replace the dangerous tab with the warning page', () =
   assert.match(warningFlow, /openWarningPage\(tabId,\s*tabState,\s*['"]postload['"]\)/);
   assert.match(warningPage, /chrome\.tabs\.update\(tabId,\s*\{\s*url:\s*warningUrl/);
   assert.match(warningPage, /originalUrl/);
-  assert.match(warningPage, /historySteps/);
+  assert.match(warningPage, /nonce:\s*createBlockedNonce\(\)/);
+  assert.match(warningPage, /safeUrl/);
 });
 
 test('the warning page exposes only safe primary actions and confirms trust', () => {
@@ -208,7 +212,51 @@ test('the warning page exposes only safe primary actions and confirms trust', ()
 
   assert.match(warningScript, /https:\/\/www\.doubao\.com\/chat\/\?q=/);
   assert.match(warningScript, /type:\s*['"]TRUST_BLOCKED_SITE['"]/);
-  assert.match(warningScript, /window\.history\.go\(-historySteps\)/);
+  assert.match(warningScript, /payload:\s*\{\s*nonce\s*\}/);
+  assert.match(warningScript, /type:\s*['"]RETURN_TO_SAFETY['"]/);
+  assert.doesNotMatch(warningScript, /window\.history\.go/);
+});
+
+test('blocked actions require a trusted extension context', () => {
+  const trustHandler = sourceBetween(
+    serviceWorker,
+    'case MSG_TYPES.TRUST_BLOCKED_SITE:',
+    'case MSG_TYPES.RETURN_TO_SAFETY:'
+  );
+  const warningResources = (manifest.web_accessible_resources || [])
+    .flatMap(entry => entry.resources || []);
+
+  assert.equal(warningResources.includes('warning/warning.html'), false);
+  assert.match(trustHandler, /requireBlockedContext/);
+  assert.match(trustHandler, /message\.payload\?\.nonce/);
+  assert.doesNotMatch(trustHandler, /message\.payload\?\.url/);
+});
+
+test('stale analysis cannot replace a newer navigation', () => {
+  const warningFlow = sourceBetween(
+    serviceWorker,
+    'async function triggerWarningFlow',
+    'async function injectDownloadBlocker'
+  );
+
+  assert.match(warningFlow, /isCurrentAnalysisTarget/);
+  assert.match(serviceWorker, /_navigationGenerations/);
+  assert.match(serviceWorker, /sender\.tab\.url !== url/);
+});
+
+test('warning state and reports use the backend blocked context', () => {
+  assert.match(serviceWorker, /isWarningPageUrl\(url\) \|\| isReportPageUrl\(url\)\) return/);
+  assert.match(serviceWorker, /case MSG_TYPES\.OPEN_BLOCKED_REPORT/);
+  assert.match(serviceWorker, /requireBlockedContext\([\s\S]*REPORT_PAGE_URL/);
+  assert.match(reportScript, /payload:\s*\{\s*reportType:\s*['"]false_positive['"],\s*nonce/);
+  assert.match(reportScript, /if \(!response\?\.success\)/);
+});
+
+test('site blacklist changes reconcile every open tab', () => {
+  assert.match(serviceWorker, /function syncSiteAccessStateAcrossTabs/);
+  assert.match(serviceWorker, /applyBlacklistToTab/);
+  assert.match(serviceWorker, /releaseBlacklistFromTab/);
+  assert.match(serviceWorker, /changes\[STORAGE_KEYS\.WHITELIST\] \|\| changes\[STORAGE_KEYS\.SITE_BLACKLIST\]/);
 });
 
 test('the warning page inherits light, dark, and automatic extension themes', () => {

@@ -69,13 +69,13 @@
   }
 
   const params = new URLSearchParams(window.location.search);
+  const nonce = params.get('nonce') || '';
   const domain = params.get('domain') || '未知网站';
   const score = Math.max(0, parseInt(params.get('score'), 10) || 0);
   const correctUrl = sanitizeUrl(params.get('correctUrl') || '');
   const fallbackUrl = sanitizeUrl('https://' + domain);
   const originalUrl = sanitizeUrl(params.get('originalUrl') || '') || fallbackUrl;
   const reasons = (params.get('reasons') || '').trim();
-  const historySteps = Math.min(2, Math.max(1, parseInt(params.get('historySteps'), 10) || 1));
 
   const domainEl = document.getElementById('info-domain');
   const dialogDomainEl = document.getElementById('dialog-domain');
@@ -126,16 +126,18 @@
 
   async function returnToSafety() {
     setPageStatus('正在返回安全页面');
-
-    if (window.history.length > historySteps) {
-      window.history.go(-historySteps);
-      return;
-    }
-
     try {
-      await moveCurrentTab(correctUrl || 'chrome://newtab/');
+      const response = await chrome.runtime.sendMessage({
+        type: 'RETURN_TO_SAFETY',
+        payload: { nonce }
+      });
+      if (!response?.success) throw new Error(response?.error || 'return_failed');
     } catch (error) {
-      window.close();
+      try {
+        await moveCurrentTab(correctUrl || 'chrome://newtab/');
+      } catch {
+        window.close();
+      }
     }
   }
 
@@ -180,12 +182,12 @@
     try {
       const response = await chrome.runtime.sendMessage({
         type: 'TRUST_BLOCKED_SITE',
-        payload: { url: originalUrl, domain, score }
+        payload: { nonce }
       });
       if (!response || response.success !== true) {
         throw new Error(response && response.error ? response.error : 'unknown_error');
       }
-      window.location.replace(originalUrl);
+      window.location.replace(response.url);
     } catch (error) {
       confirmTrustButton.disabled = false;
       dialogStatusEl.textContent = '保存失败，请重试或返回安全页面';
@@ -193,23 +195,14 @@
   }
 
   async function openReport() {
-    const reportParams = new URLSearchParams({
-      domain,
-      score: String(score),
-      correctUrl
-    });
-    const reportUrl = chrome.runtime.getURL('warning/report.html?' + reportParams.toString());
-
     try {
-      await chrome.windows.create({
-        url: reportUrl,
-        type: 'popup',
-        width: 480,
-        height: 560,
-        focused: true
+      const response = await chrome.runtime.sendMessage({
+        type: 'OPEN_BLOCKED_REPORT',
+        payload: { nonce }
       });
+      if (!response?.success) throw new Error(response?.error || 'report_failed');
     } catch (error) {
-      await chrome.tabs.create({ url: reportUrl, active: true });
+      setPageStatus('无法打开报告，请稍后重试');
     }
   }
 

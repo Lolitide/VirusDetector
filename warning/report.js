@@ -11,6 +11,7 @@
   }
 
   const params = new URLSearchParams(window.location.search);
+  const nonce = params.get('nonce') || '';
   const domain = params.get('domain') || '未知网站';
   const score = Math.max(0, parseInt(params.get('score'), 10) || 0);
   const correctUrl = safeUrl(params.get('correctUrl') || '');
@@ -36,10 +37,11 @@
     falsePositiveButton.disabled = true;
     falsePositiveButton.textContent = '上报中…';
     try {
-      await chrome.runtime.sendMessage({
+      const response = await chrome.runtime.sendMessage({
         type: 'SUBMIT_REPORT',
-        payload: { reportType: 'false_positive', domain, note: '' }
+        payload: { reportType: 'false_positive', nonce, note: '' }
       });
+      if (!response?.success) throw new Error(response?.error || 'report_failed');
       falsePositiveButton.textContent = '已上报为误报，感谢反馈';
     } catch {
       falsePositiveButton.disabled = false;

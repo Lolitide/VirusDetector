@@ -47,22 +47,6 @@
       "all_frames": false
     }
   ],
-  "web_accessible_resources": [
-    {
-      "resources": [
-        "warning/warning.html",
-        "warning/warning.js",
-        "warning/warning.css",
-        "warning/download-confirm.html",
-        "warning/download-confirm.js",
-        "warning/download-confirm.css"
-      ],
-      "matches": [
-        "http://*/*",
-        "https://*/*"
-      ]
-    }
-  ],
   "options_ui": {
     "page": "options/options.html",
     "open_in_tab": true

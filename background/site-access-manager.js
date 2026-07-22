@@ -1,5 +1,13 @@
 import { SITE_BLACKLIST_MAX_ENTRIES, STORAGE_KEYS } from '../utils/constants.js';
 
+const COMMON_PUBLIC_SUFFIXES = new Set([
+  'appspot.com', 'azurewebsites.net', 'cloudfront.net', 'github.io',
+  'herokuapp.com', 'netlify.app', 'pages.dev', 'vercel.app', 'workers.dev'
+]);
+const COMMON_CCTLD_SECOND_LEVELS = new Set([
+  'ac', 'co', 'com', 'edu', 'gov', 'mil', 'net', 'nom', 'org'
+]);
+
 export class SiteAccessManager {
   static _whitelist = null;
   static _blacklist = null;
@@ -10,7 +18,9 @@ export class SiteAccessManager {
     try {
       const input = value.trim();
       const url = new URL(input.includes('://') ? input : `https://${input}`);
-      return url.hostname.toLowerCase().replace(/^www\./, '').replace(/\.$/, '');
+      const domain = url.hostname.toLowerCase().replace(/\.$/, '');
+      if (!domain || this._isPublicSuffix(domain)) return '';
+      return domain;
     } catch {
       return '';
     }
@@ -196,6 +206,17 @@ export class SiteAccessManager {
 
   static _covers(entry, domain) {
     return entry === domain || domain.endsWith(`.${entry}`);
+  }
+
+  static _isPublicSuffix(domain) {
+    if (domain === 'localhost' || /^\d{1,3}(?:\.\d{1,3}){3}$/.test(domain) || domain.includes(':')) {
+      return false;
+    }
+
+    const labels = domain.split('.');
+    if (labels.length < 2 || COMMON_PUBLIC_SUFFIXES.has(domain)) return true;
+    return labels.length === 2 && labels[1].length === 2 &&
+      COMMON_CCTLD_SECOND_LEVELS.has(labels[0]);
   }
 
   static _domainsOverlap(left, right) {
