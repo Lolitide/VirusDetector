@@ -390,6 +390,7 @@ function createTabState() {
     },
     icpStrings: [], textSignals: null, pageMetrics: null, linkMetrics: null,
     downloadState: { hasDownloadedArchive: false, archiveFileName: null },
+    navigationGeneration: 0, analysisDocumentId: '',
     lastAnalyzed: 0
   };
 }
@@ -439,6 +440,13 @@ async function requireBlockedContext(sender, nonce, pageUrl) {
 async function saveBlockedContextToTab(tabId, context) {
   const tabState = await loadTabState(tabId);
   tabState._blockedContext = { ...context };
+  await saveTabState(tabId, tabState);
+}
+
+async function discardBlockedContext(tabId, nonce) {
+  const tabState = await loadTabState(tabId);
+  if (tabState._blockedContext?.nonce !== nonce) return;
+  delete tabState._blockedContext;
   await saveTabState(tabId, tabState);
 }
 
@@ -500,16 +508,62 @@ const _navigationStates = new Map();
 const _lastCommittedHttpUrls = new Map();
 const WARNING_COOLDOWN_MS = 5000;
 
-async function isCurrentAnalysisTarget(tabId, tabState) {
+function createAnalysisIdentity(tabState) {
+  return {
+    url: tabState.url || '',
+    navigationGeneration: tabState.navigationGeneration ?? 0,
+    analysisDocumentId: tabState.analysisDocumentId || ''
+  };
+}
+
+function matchesAnalysisIdentity(expected, current) {
+  return expected.url === current.url &&
+    expected.navigationGeneration === current.navigationGeneration &&
+    expected.analysisDocumentId === current.analysisDocumentId;
+}
+
+function tabStateMatchesAnalysisIdentity(tabState, expected) {
+  return matchesAnalysisIdentity(expected, createAnalysisIdentity(tabState));
+}
+
+async function getCurrentAnalysisIdentity(tabId) {
+  const navigation = _navigationStates.get(tabId);
+  const tab = await chrome.tabs.get(tabId);
+  const frame = await chrome.webNavigation.getFrame({ tabId, frameId: 0 }).catch(() => null);
+  return {
+    url: frame?.url || tab.url || '',
+    navigationGeneration: _navigationGenerations.get(tabId) ?? navigation?.generation ?? 0,
+    analysisDocumentId: frame?.documentId || navigation?.documentId || ''
+  };
+}
+
+async function isCurrentAnalysisIdentity(tabId, expected, options = {}) {
   try {
     const tab = await chrome.tabs.get(tabId);
-    if (!tab.url || tab.url !== tabState.url) return false;
-    const currentGeneration = _navigationGenerations.get(tabId);
-    return tabState.navigationGeneration == null || currentGeneration == null ||
-      tabState.navigationGeneration === currentGeneration;
+    if (options.allowWarningPage && isWarningPageUrl(tab.url || '')) {
+      const tabState = await loadTabState(tabId);
+      return tabState._blockedContext?.url === expected.url;
+    }
+
+    const navigation = _navigationStates.get(tabId);
+    if (options.allowPending && navigation?.generation === expected.navigationGeneration &&
+        navigation.url === expected.url) {
+      if (!navigation.committed) return true;
+      const current = await getCurrentAnalysisIdentity(tabId);
+      return current.url === expected.url &&
+        current.navigationGeneration === expected.navigationGeneration &&
+        current.analysisDocumentId === (navigation.documentId || current.analysisDocumentId);
+    }
+
+    const current = await getCurrentAnalysisIdentity(tabId);
+    return matchesAnalysisIdentity(expected, current);
   } catch {
     return false;
   }
+}
+
+async function isCurrentAnalysisTarget(tabId, tabState) {
+  return isCurrentAnalysisIdentity(tabId, createAnalysisIdentity(tabState));
 }
 
 /**
@@ -688,6 +742,12 @@ async function recheckTabAfterWhitelistRemoval(tabId, url) {
   tabState.isWhitelisted = false;
   delete tabState._preWhitelistState;
 
+  const currentIdentity = await getCurrentAnalysisIdentity(tabId).catch(() => null);
+  if (currentIdentity?.url === url) {
+    tabState.navigationGeneration = currentIdentity.navigationGeneration;
+    tabState.analysisDocumentId = currentIdentity.analysisDocumentId;
+  }
+
   if (backup && backup.domain === domain) {
     tabState.score = backup.score;
     tabState.riskLevel = backup.riskLevel;
@@ -716,6 +776,9 @@ async function applyBlacklistToTab(tabId, url) {
   const tabState = await loadTabState(tabId);
   if (tabState.ruleResults?.siteBlacklist && tabState.domain === domain) return;
 
+  const currentIdentity = await getCurrentAnalysisIdentity(tabId).catch(() => null);
+  if (!currentIdentity || currentIdentity.url !== url) return;
+
   if (tabState.isAnalyzed && tabState.domain === domain && !tabState.ruleResults?.siteBlacklist) {
     tabState._preBlacklistState = createAnalysisSnapshot(tabState);
   }
@@ -725,7 +788,8 @@ async function applyBlacklistToTab(tabId, url) {
   tabState.riskLevel = RISK_LEVEL.WARNING;
   tabState.isAnalyzed = true;
   tabState.isWhitelisted = false;
-  tabState.navigationGeneration = _navigationGenerations.get(tabId) || 0;
+  tabState.navigationGeneration = currentIdentity.navigationGeneration;
+  tabState.analysisDocumentId = currentIdentity.analysisDocumentId;
   tabState.ruleResults = {
     siteBlacklist: {
       triggered: true,
@@ -746,6 +810,12 @@ async function releaseBlacklistFromTab(tabId, url, isWarningPage) {
   const backup = tabState._preBlacklistState;
   delete tabState._preBlacklistState;
   let restored = false;
+
+  const currentIdentity = await getCurrentAnalysisIdentity(tabId).catch(() => null);
+  if (currentIdentity?.url === url) {
+    tabState.navigationGeneration = currentIdentity.navigationGeneration;
+    tabState.analysisDocumentId = currentIdentity.analysisDocumentId;
+  }
 
   if (backup?.domain === domain) {
     tabState.url = url;
@@ -1189,10 +1259,13 @@ function injectBlockerFunc(archiveUrls, detectNonArchive, mode) {
 
 /**
  * 将当前危险标签页替换为扩展内的安全拦截页。
- * preflight 表示目标页面尚未提交，回退一步即可；postload 表示页面已经加载，
- * 需要跳过危险页面和拦截页两个历史记录。
+ * preflight 表示目标页面尚未提交，postload 表示页面已经加载。
  */
 async function openWarningPage(tabId, tabState, stage = 'postload') {
+  const expectedIdentity = createAnalysisIdentity(tabState);
+  const identityOptions = { allowPending: stage === 'preflight', allowWarningPage: true };
+  if (!await isCurrentAnalysisIdentity(tabId, expectedIdentity, identityOptions)) return;
+
   const originalUrl = shouldSkipUrl(tabState.url) ? '' : tabState.url;
   const reasons = Object.values(tabState.ruleResults || {})
     .filter(result => result && result.triggered)
@@ -1220,6 +1293,11 @@ async function openWarningPage(tabId, tabState, stage = 'postload') {
   };
   tabState._blockedContext = blockedContext;
   await saveTabState(tabId, tabState);
+
+  if (!await isCurrentAnalysisIdentity(tabId, expectedIdentity, identityOptions)) {
+    await discardBlockedContext(tabId, blockedContext.nonce);
+    return;
+  }
 
   const params = new URLSearchParams({
     nonce: blockedContext.nonce,
@@ -1257,9 +1335,21 @@ async function analyzePage(tabId, url, domain, pageMetrics, linkMetrics) {
   }
 
   let tabState = await loadTabState(tabId);
+  let analysisIdentity;
+  try {
+    analysisIdentity = await getCurrentAnalysisIdentity(tabId);
+  } catch {
+    return;
+  }
+  if (analysisIdentity.url !== url) return;
+  tabState.url = url;
+  tabState.domain = domain;
+  tabState.navigationGeneration = analysisIdentity.navigationGeneration;
+  tabState.analysisDocumentId = analysisIdentity.analysisDocumentId;
 
   // 白名单检查：如果在白名单中，跳过所有检测
   if (await SiteAccessManager.isWhitelisted(url)) {
+    if (!await isCurrentAnalysisIdentity(tabId, analysisIdentity)) return;
     console.log('[ServiceWorker] 网站已在白名单中，跳过检测:', domain);
     tabState.isAnalyzed = true;
     tabState.isWhitelisted = true;
@@ -1276,6 +1366,7 @@ async function analyzePage(tabId, url, domain, pageMetrics, linkMetrics) {
 
   // 站点黑名单检查：如果在站点黑名单中，直接赋予高分触发警告流程
   if (await SiteAccessManager.isBlacklisted(domain)) {
+    if (!await isCurrentAnalysisIdentity(tabId, analysisIdentity)) return;
     console.log('[ServiceWorker] 站点在黑名单中，直接标记为高风险:', domain);
     // 保存当前分析数据备份（如果存在完整的非黑名单分析结果），以便移除黑名单后恢复
     if (tabState.isAnalyzed && tabState.ruleResults && Object.keys(tabState.ruleResults).length > 0
@@ -1312,6 +1403,7 @@ async function analyzePage(tabId, url, domain, pageMetrics, linkMetrics) {
   if (!hasFreshData) {
     const cached = await CacheManager.get(domain);
     if (cached) {
+      if (!await isCurrentAnalysisIdentity(tabId, analysisIdentity)) return;
       console.log('[ServiceWorker] 使用缓存结果:', domain, cached.score);
       tabState.score = cached.score;
       tabState.riskLevel = cached.isMalicious ? RISK_LEVEL.WARNING : RISK_LEVEL.SAFE;
@@ -1372,6 +1464,7 @@ async function analyzePage(tabId, url, domain, pageMetrics, linkMetrics) {
 
     // ═══ 阶段1：同步评估（规则一~五，不含Whois网络请求）═══
     const syncResult = await ScoringEngine.evaluateSync(ctx, settings);
+    if (!await isCurrentAnalysisIdentity(tabId, analysisIdentity)) return;
 
     tabState.score = syncResult.totalScore;
     tabState.riskLevel = syncResult.riskLevel;
@@ -1414,7 +1507,9 @@ async function analyzePage(tabId, url, domain, pageMetrics, linkMetrics) {
     if (tabState._whoisPending) {
       // 保存上下文用于异步回调中的竞态检查
       const ctxSnapshot = {
-        domain, tabId, pageUrl: tabState.url || url,
+        domain, tabId, url: tabState.url || url,
+        navigationGeneration: tabState.navigationGeneration ?? 0,
+        analysisDocumentId: tabState.analysisDocumentId || '',
         syncScore: syncResult.totalScore,
         syncBreakdown: syncResult.breakdown,
         correctUrl: syncResult.correctUrl,
@@ -1446,7 +1541,9 @@ async function analyzePage(tabId, url, domain, pageMetrics, linkMetrics) {
       const rule3Result = syncResult.breakdown.rule3;
       const icpSnapshot = {
         domain, tabId,
-        pageUrl: tabState.url || url,
+        url: tabState.url || url,
+        navigationGeneration: tabState.navigationGeneration ?? 0,
+        analysisDocumentId: tabState.analysisDocumentId || '',
         icpStrings: tabState.icpStrings || [],
         hasIcpGovLink: tabState.hasIcpGovLink || false,
         impersonating: syncResult.breakdown.rule1.triggered || false,
@@ -1480,24 +1577,12 @@ async function analyzePage(tabId, url, domain, pageMetrics, linkMetrics) {
  */
 async function _applyWhoisUpdate(ctx, whoisResult) {
   const { domain, tabId, syncScore, syncBreakdown, correctUrl, officialName } = ctx;
-  let currentUrl = '';
-
-  // 竞态条件检查：用户是否已导航到其他页面
-  try {
-    const tab = await chrome.tabs.get(tabId);
-    currentUrl = tab.url || '';
-    const currentDomain = UrlUtils.extractHostname(tab.url || '');
-    if (currentDomain !== domain) {
-      console.log('[ServiceWorker] Whois结果过期（用户已导航）:', domain, '→', currentDomain);
-      return;
-    }
-  } catch (e) {
-    // 标签页已关闭
-    console.log('[ServiceWorker] Whois结果过期（标签页已关闭）:', tabId);
+  if (!await isCurrentAnalysisIdentity(tabId, ctx)) {
+    console.log('[ServiceWorker] Whois结果过期:', domain);
     return;
   }
 
-  if (await SiteAccessManager.isWhitelisted(currentUrl)) {
+  if (await SiteAccessManager.isWhitelisted(ctx.url)) {
     await removeDownloadBlocker(tabId);
     setIconWhitelist(tabId);
     return;
@@ -1505,8 +1590,8 @@ async function _applyWhoisUpdate(ctx, whoisResult) {
 
   // 加载最新 tabState
   const tabState = await loadTabState(tabId);
-  if (tabState.domain !== domain) {
-    console.log('[ServiceWorker] Whois结果过期（tabState域名不匹配）:', domain);
+  if (tabState.domain !== domain || !tabStateMatchesAnalysisIdentity(tabState, ctx)) {
+    console.log('[ServiceWorker] Whois结果过期（标签页状态不匹配）:', domain);
     return;
   }
 
@@ -1531,6 +1616,8 @@ async function _applyWhoisUpdate(ctx, whoisResult) {
     correctUrl: correctUrl,
     ruleResults: sanitizeRuleResultsForCache(mergedBreakdown)
   });
+
+  if (!await isCurrentAnalysisIdentity(tabId, ctx)) return;
 
   // 仅在分数从低于阈值跨到≥阈值时补触发警告（保守策略：不降级）
   if (newScore >= getEffectiveThreshold('scoreThreshold', SCORE_THRESHOLD) && oldScore < getEffectiveThreshold('scoreThreshold', SCORE_THRESHOLD)) {
@@ -1611,47 +1698,39 @@ async function _launchAsyncIcpCheck(snapshot) {
 async function _applyIcpUpdate(snapshot, icpApi) {
   const { domain, tabId } = snapshot;
 
-  // 竞态条件检查：用户是否已导航到其他页面
-  try {
-    const tab = await chrome.tabs.get(tabId);
-    const currentDomain = UrlUtils.extractHostname(tab.url || '');
-    if (currentDomain !== domain) {
-      console.log('[ServiceWorker] ICP结果过期（用户已导航）:', domain, '→', currentDomain);
-      return;
-    }
-  } catch (e) {
-    console.log('[ServiceWorker] ICP结果过期（标签页已关闭）:', tabId);
+  if (!await isCurrentAnalysisIdentity(tabId, snapshot)) {
+    console.log('[ServiceWorker] ICP结果过期:', domain);
     return;
   }
 
-  // 白名单检查
-  try {
-    const tab = await chrome.tabs.get(tabId);
-    if (await SiteAccessManager.isWhitelisted(tab.url || '')) return;
-  } catch (e) { return; }
-
-  // 加载最新 tabState
-  const tabState = await loadTabState(tabId);
-  if (tabState.domain !== domain) {
-    console.log('[ServiceWorker] ICP结果过期（tabState域名不匹配）:', domain);
-    return;
-  }
+  if (await SiteAccessManager.isWhitelisted(snapshot.url)) return;
 
   // 重新执行规则三（仅注入 API 结果，其余参数与同步阶段一致）
   // 注意：同步阶段 _evaluateRule3 的 pageText 和 textSignals 均为 undefined，
   // 此处保持一致以确保判定结果仅受 icpApi 参数影响。
   const settings = await getSettings();
-  setActiveSettings(settings);
-  const newRule3 = ScoringEngine._evaluateRule3(
-    domain,
-    undefined,                       // pageText（同步阶段亦未传递）
-    snapshot.icpStrings,
-    snapshot.hasIcpGovLink,
-    undefined,                       // textSignals（同步阶段亦未传递）
-    icpApi,
-    snapshot.impersonating
-  );
-  setActiveSettings(null);
+  let newRule3;
+  try {
+    setActiveSettings(settings);
+    newRule3 = ScoringEngine._evaluateRule3(
+      domain,
+      undefined,
+      snapshot.icpStrings,
+      snapshot.hasIcpGovLink,
+      undefined,
+      icpApi,
+      snapshot.impersonating
+    );
+  } finally {
+    setActiveSettings(null);
+  }
+
+  if (!await isCurrentAnalysisIdentity(tabId, snapshot)) return;
+  const tabState = await loadTabState(tabId);
+  if (tabState.domain !== domain || !tabStateMatchesAnalysisIdentity(tabState, snapshot)) {
+    console.log('[ServiceWorker] ICP结果过期（标签页状态不匹配）:', domain);
+    return;
+  }
 
   const oldRule3Score = snapshot.oldRule3.score;
   const newRule3Score = newRule3.score || 0;
@@ -1693,6 +1772,8 @@ async function _applyIcpUpdate(snapshot, icpApi) {
     correctUrl: snapshot.correctUrl,
     ruleResults: sanitizeRuleResultsForCache(mergedBreakdown)
   });
+
+  if (!await isCurrentAnalysisIdentity(tabId, snapshot)) return;
 
   console.log('[ServiceWorker] ICP异步核验完成（分数已更新）:', {
     domain,
@@ -1824,11 +1905,14 @@ async function runNavigationPreflight(details) {
   tabState.isAnalyzed = true;
   tabState.isWhitelisted = false;
   tabState.navigationGeneration = generation;
+  const navigation = _navigationStates.get(tabId);
+  tabState.analysisDocumentId = navigation?.generation === generation
+    ? navigation.documentId || ''
+    : '';
   await saveTabState(tabId, tabState);
 
   if (!isCurrentNavigation()) return;
   setIconRed(tabId);
-  const navigation = _navigationStates.get(tabId);
   const stage = navigation?.generation === generation && navigation.committed
     ? 'postload'
     : 'preflight';
@@ -1879,17 +1963,29 @@ chrome.webNavigation.onCompleted.addListener(async (details) => {
     return;
   }
 
+  const navigation = _navigationStates.get(tabId);
+  if (navigation && (navigation.url !== url ||
+      (details.documentId && navigation.documentId && details.documentId !== navigation.documentId))) {
+    return;
+  }
+
   const domain = UrlUtils.extractHostname(url);
   let tabState = await loadTabState(tabId);
   tabState.url = url; tabState.domain = domain;
-  tabState.navigationGeneration = _navigationGenerations.get(tabId) || 0;
+  delete tabState._blockedContext;
+  tabState.navigationGeneration = navigation?.generation ?? _navigationGenerations.get(tabId) ?? 0;
+  tabState.analysisDocumentId = details.documentId ||
+    (navigation?.url === url ? navigation.documentId || '' : '');
+  const completedIdentity = createAnalysisIdentity(tabState);
   // 导航到新页面时重置下载状态，避免旧页面的下载事件污染新页面的检测
   tabState.downloadState = { hasDownloadedArchive: false, archiveFileName: null };
   tabState.isAnalyzed = false;
+  if (!await isCurrentAnalysisIdentity(tabId, completedIdentity)) return;
   await saveTabState(tabId, tabState);
 
   // 白名单检查：如果在白名单中，直接跳过分析
   if (await SiteAccessManager.isWhitelisted(url)) {
+    if (!await isCurrentAnalysisIdentity(tabId, completedIdentity)) return;
     tabState.isAnalyzed = true;
     tabState.isWhitelisted = true;
     tabState.score = 0;
@@ -2154,14 +2250,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
       }
 
+      const messageNavigation = _navigationStates.get(tabId);
+      const messageIdentity = {
+        url,
+        navigationGeneration: _navigationGenerations.get(tabId) ?? messageNavigation?.generation ?? 0,
+        analysisDocumentId: sender.documentId || messageNavigation?.documentId || ''
+      };
+      if (messageNavigation && (messageNavigation.url !== url ||
+          (messageNavigation.documentId && messageIdentity.analysisDocumentId !== messageNavigation.documentId))) {
+        sendResponse({ received: false, reason: 'stale_document' });
+        return false;
+      }
+
       loadTabState(tabId).then(async (ts) => {
+        if (!await isCurrentAnalysisIdentity(tabId, messageIdentity)) return;
         ts.icpStrings = icpStrings || [];
         ts.textSignals = textSignals || null;
         ts.hasIcpGovLink = !!hasIcpGovLink;
         ts.url = url || ts.url;
         ts.domain = domain || ts.domain;
-        ts.navigationGeneration = _navigationGenerations.get(tabId) || 0;
-        ts.analysisDocumentId = sender.documentId || '';
+        ts.navigationGeneration = messageIdentity.navigationGeneration;
+        ts.analysisDocumentId = messageIdentity.analysisDocumentId;
         if (pageMetrics) ts.pageMetrics = pageMetrics;
         if (linkMetrics) ts.linkMetrics = linkMetrics;
         // 存储 Resource Resolver 数据
@@ -2236,8 +2345,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const url = message.payload?.url || '';
         if (url) {
           await SiteAccessManager.removeFromWhitelist(url);
-          await recheckTabAfterWhitelistRemoval(tabs[0].id, url);
-          await syncWhitelistStateAcrossTabs();
+          await syncSiteAccessStateAcrossTabs();
         }
         sendResponse({ success: true });
       });
@@ -2305,17 +2413,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           score: String(context.score),
           correctUrl: context.correctUrl || ''
         });
-        const reportWindow = await chrome.windows.create({
-          url: chrome.runtime.getURL('warning/report.html?' + params.toString()),
-          type: 'popup',
-          width: 480,
-          height: 560,
-          focused: true
-        });
-        let reportTab = reportWindow?.tabs?.[0] || null;
-        if (!reportTab && reportWindow?.id != null) {
-          const tabs = await chrome.tabs.query({ windowId: reportWindow.id });
-          reportTab = tabs[0] || null;
+        const reportUrl = chrome.runtime.getURL('warning/report.html?' + params.toString());
+        let reportTab = null;
+        try {
+          const reportWindow = await chrome.windows.create({
+            url: reportUrl,
+            type: 'popup',
+            width: 480,
+            height: 560,
+            focused: true
+          });
+          reportTab = reportWindow?.tabs?.[0] || null;
+          if (!reportTab && reportWindow?.id != null) {
+            const tabs = await chrome.tabs.query({ windowId: reportWindow.id });
+            reportTab = tabs[0] || null;
+          }
+        } catch {
+          reportTab = await chrome.tabs.create({ url: reportUrl, active: true });
         }
         if (!reportTab?.id) throw new Error('report_tab_missing');
         await saveBlockedContextToTab(reportTab.id, context);

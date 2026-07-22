@@ -23,14 +23,15 @@ beforeEach(() => {
   SiteAccessManager.invalidate();
 });
 
-test('normalizes domains and applies parent whitelist entries to subdomains', async () => {
+test('normalizes domains and keeps whitelist entries scoped to one hostname', async () => {
   await SiteAccessManager.replaceWhitelist(['Example.com']);
 
   assert.deepEqual(await SiteAccessManager.getWhitelist(), ['example.com']);
-  assert.equal(await SiteAccessManager.isWhitelisted('https://login.example.com/path'), true);
+  assert.equal(await SiteAccessManager.isWhitelisted('https://example.com/path'), true);
+  assert.equal(await SiteAccessManager.isWhitelisted('https://login.example.com/path'), false);
 });
 
-test('adding a whitelist entry removes an overlapping site blacklist entry', async () => {
+test('adding a whitelist entry does not remove a parent hostname blacklist', async () => {
   store.site_blacklist = {
     'example.com': { addedAt: 1, addedBy: 'manual', note: '' }
   };
@@ -40,10 +41,12 @@ test('adding a whitelist entry removes an overlapping site blacklist entry', asy
 
   assert.equal(await SiteAccessManager.isWhitelisted('login.example.com'), true);
   assert.equal(await SiteAccessManager.isBlacklisted('login.example.com'), false);
-  assert.deepEqual(await SiteAccessManager.getSiteBlacklist(), {});
+  assert.deepEqual(await SiteAccessManager.getSiteBlacklist(), {
+    'example.com': { addedAt: 1, addedBy: 'manual', note: '' }
+  });
 });
 
-test('adding a blacklist entry removes conflicting whitelist entries', async () => {
+test('adding a blacklist entry does not remove a parent hostname whitelist', async () => {
   store.whitelist = ['example.com'];
   SiteAccessManager.invalidate();
 
@@ -51,7 +54,7 @@ test('adding a blacklist entry removes conflicting whitelist entries', async () 
 
   assert.equal(await SiteAccessManager.isWhitelisted('login.example.com'), false);
   assert.equal(await SiteAccessManager.isBlacklisted('login.example.com'), true);
-  assert.deepEqual(await SiteAccessManager.getWhitelist(), []);
+  assert.deepEqual(await SiteAccessManager.getWhitelist(), ['example.com']);
 });
 
 test('keeps www hostnames exact instead of widening them to the parent suffix', async () => {
@@ -61,7 +64,10 @@ test('keeps www hostnames exact instead of widening them to the parent suffix', 
   assert.equal(await SiteAccessManager.isWhitelisted('https://example.com'), false);
 });
 
-test('rejects bare and common public suffix entries', async () => {
-  await assert.rejects(() => SiteAccessManager.addToWhitelist('com'), /invalid_domain/);
-  await assert.rejects(() => SiteAccessManager.addToBlacklist('co.uk'), /invalid_domain/);
+test('shared hosting suffixes never affect sibling hostnames', async () => {
+  await SiteAccessManager.addToBlacklist('alice.blogspot.com');
+  await SiteAccessManager.addToWhitelist('team.firebaseapp.com');
+
+  assert.equal(await SiteAccessManager.isBlacklisted('bob.blogspot.com'), false);
+  assert.equal(await SiteAccessManager.isWhitelisted('other.firebaseapp.com'), false);
 });

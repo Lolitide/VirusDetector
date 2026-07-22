@@ -242,6 +242,29 @@ test('stale analysis cannot replace a newer navigation', () => {
   assert.match(warningFlow, /isCurrentAnalysisTarget/);
   assert.match(serviceWorker, /_navigationGenerations/);
   assert.match(serviceWorker, /sender\.tab\.url !== url/);
+  assert.match(serviceWorker, /analysisDocumentId/);
+  assert.match(serviceWorker, /isCurrentAnalysisIdentity/);
+  assert.match(serviceWorker, /tabStateMatchesAnalysisIdentity/);
+});
+
+test('async Whois and ICP results are bound to one document', () => {
+  const whoisUpdate = sourceBetween(
+    serviceWorker,
+    'async function _applyWhoisUpdate',
+    '// ==================== ICP 异步核验 ===================='
+  );
+  const icpUpdate = sourceBetween(
+    serviceWorker,
+    'async function _applyIcpUpdate',
+    'async function _postReportToWorker'
+  );
+
+  assert.match(serviceWorker, /navigationGeneration:\s*tabState\.navigationGeneration/);
+  assert.match(serviceWorker, /analysisDocumentId:\s*tabState\.analysisDocumentId/);
+  assert.match(whoisUpdate, /isCurrentAnalysisIdentity\(tabId,\s*ctx\)/);
+  assert.match(whoisUpdate, /tabStateMatchesAnalysisIdentity\(tabState,\s*ctx\)/);
+  assert.match(icpUpdate, /isCurrentAnalysisIdentity\(tabId,\s*snapshot\)/);
+  assert.match(icpUpdate, /tabStateMatchesAnalysisIdentity\(tabState,\s*snapshot\)/);
 });
 
 test('warning state and reports use the backend blocked context', () => {
@@ -257,6 +280,28 @@ test('site blacklist changes reconcile every open tab', () => {
   assert.match(serviceWorker, /applyBlacklistToTab/);
   assert.match(serviceWorker, /releaseBlacklistFromTab/);
   assert.match(serviceWorker, /changes\[STORAGE_KEYS\.WHITELIST\] \|\| changes\[STORAGE_KEYS\.SITE_BLACKLIST\]/);
+});
+
+test('whitelist removal uses only the serialized cross-tab reconciliation queue', () => {
+  const handler = sourceBetween(
+    serviceWorker,
+    'case MSG_TYPES.REMOVE_FROM_WHITELIST:',
+    'case MSG_TYPES.CHECK_WHITELIST:'
+  );
+
+  assert.match(handler, /syncSiteAccessStateAcrossTabs\(\)/);
+  assert.doesNotMatch(handler, /recheckTabAfterWhitelistRemoval/);
+});
+
+test('blocked reports fall back to a normal tab when popup creation fails', () => {
+  const handler = sourceBetween(
+    serviceWorker,
+    'case MSG_TYPES.OPEN_BLOCKED_REPORT:',
+    '// 下载二次确认'
+  );
+
+  assert.match(handler, /try\s*\{[\s\S]*chrome\.windows\.create/);
+  assert.match(handler, /catch\s*\{[\s\S]*chrome\.tabs\.create/);
 });
 
 test('the warning page inherits light, dark, and automatic extension themes', () => {
