@@ -540,9 +540,8 @@ const WARNING_COOLDOWN_MS = 5000;
 /**
  * 触发高危响应：
  * 1. 图标变红（总是执行）
- * 2. 注入下载拦截脚本（仅首次）
- * 3. 弹出系统通知（5秒冷却）
- * 4. 创建警告窗口（5秒冷却，同域名不重复）
+ * 2. 默认将危险标签页替换为扩展内的拦截页
+ * 3. 用户关闭拦截页时，降级为下载拦截与桌面通知
  */
 async function triggerWarningFlow(tabId, tabState) {
   const domain = tabState.domain;
@@ -553,7 +552,17 @@ async function triggerWarningFlow(tabId, tabState) {
   // 1. 图标即时变红（总是执行）
   setIconRed(tabId);
 
-  // 2. 收集已知压缩包链接 URL 列表（用于精准拦截）
+  const settings = await getSettings();
+
+  // 2. 默认使用标签页内拦截页，避免危险页面继续留在屏幕上。
+  if (settings.showWarningWindow !== false) {
+    await openWarningPage(tabId, tabState, 'postload');
+    console.log('[ServiceWorker] 已切换到安全拦截页:', { domain, score, correctUrl });
+    return;
+  }
+
+  // 3. 用户关闭拦截页时，保留原有下载防护与桌面通知作为降级方案。
+  // 收集已知压缩包链接 URL 列表（用于精准拦截）
   const archiveUrls = [];
   if (tabState.linkMetrics && tabState.linkMetrics.archiveDownloadLinks) {
     for (const link of tabState.linkMetrics.archiveDownloadLinks) {
@@ -563,8 +572,7 @@ async function triggerWarningFlow(tabId, tabState) {
     }
   }
 
-  // 3. 注入下载拦截脚本（仅首次，传入已知压缩包链接进行精准拦截）
-  const settings = await getSettings();
+  // 注入下载拦截脚本（传入已知压缩包链接进行精准拦截）
   if (settings.downloadInjection !== false) {
     await injectDownloadBlocker(tabId, archiveUrls);
   }
@@ -578,7 +586,7 @@ async function triggerWarningFlow(tabId, tabState) {
   }
   _warningCooldown.set(tabId, now);
 
-  // 3. 桌面通知（可通过设置关闭）
+  // 桌面通知（可通过设置关闭）
   if (settings.desktopNotifications !== false) {
     chrome.notifications.create({
       type: 'basic',
@@ -589,11 +597,6 @@ async function triggerWarningFlow(tabId, tabState) {
       buttons: correctUrl ? [{ title: '✅ 前往官网' }] : [],
       requireInteraction: true
     }).catch(() => {});
-  }
-
-  // 4. 创建警告窗口（可通过设置关闭）
-  if (settings.showWarningWindow !== false) {
-    openWarningWindow(tabState);
   }
 
   console.log('[ServiceWorker] ⚠️ 高危响应已触发:', { domain, score, correctUrl });
@@ -1013,42 +1016,35 @@ function injectBlockerFunc(archiveUrls, detectNonArchive, mode) {
 }
 
 /**
- * 打开警告窗口
+ * 将当前危险标签页替换为扩展内的安全拦截页。
+ * preflight 表示目标页面尚未提交，回退一步即可；postload 表示页面已经加载，
+ * 需要跳过危险页面和拦截页两个历史记录。
  */
-// 记录上次弹窗的域名，避免同域名重复弹窗
-let _lastWarningDomain = '';
-let _lastWarningTime = 0;
-
-function openWarningWindow(tabState) {
-  const domain = tabState.domain || '';
-  const now = Date.now();
-
-  // 同域名冷却期内不重复弹窗
-  if (domain === _lastWarningDomain && (now - _lastWarningTime) < WARNING_COOLDOWN_MS) {
-    console.log('[ServiceWorker] 同域名弹窗冷却中，跳过:', domain);
-    return;
-  }
-  _lastWarningDomain = domain;
-  _lastWarningTime = now;
-
+async function openWarningPage(tabId, tabState, stage = 'postload') {
+  const originalUrl = shouldSkipUrl(tabState.url) ? '' : tabState.url;
+  const reasons = Object.values(tabState.ruleResults || {})
+    .filter(result => result && result.triggered)
+    .map(result => result.detailCN || result.detail || '')
+    .filter(Boolean)
+    .slice(0, 5)
+    .join('；');
   const params = new URLSearchParams({
     domain: tabState.domain || '未知',
     score: String(tabState.score || 0),
     correctUrl: tabState.correctUrl || '',
-    officialName: tabState.officialName || ''
+    officialName: tabState.officialName || '',
+    originalUrl,
+    reasons,
+    historySteps: stage === 'preflight' ? '1' : '2'
   });
 
-  chrome.windows.create({
-    url: chrome.runtime.getURL('warning/warning.html?' + params.toString()),
-    type: 'popup',
-    width: 480,
-    height: 560,
-    focused: true
-  }).catch(() => {
-    chrome.tabs.create({
-      url: chrome.runtime.getURL('warning/warning.html?' + params.toString())
-    }).catch(() => {});
-  });
+  const warningUrl = chrome.runtime.getURL('warning/warning.html?' + params.toString());
+  try {
+    await chrome.tabs.update(tabId, { url: warningUrl, active: true });
+  } catch (error) {
+    console.error('[ServiceWorker] 无法替换危险标签页，改为新标签页显示警告:', error);
+    await chrome.tabs.create({ url: warningUrl, active: true }).catch(() => {});
+  }
 }
 
 // ==================== 页面分析 ====================
@@ -1135,8 +1131,7 @@ async function analyzePage(tabId, url, domain, pageMetrics, linkMetrics) {
       await saveTabState(tabId, tabState);
 
       if (cached.isMalicious) {
-        setIconRed(tabId);
-        await injectDownloadBlocker(tabId, []);  // 无实时 linkMetrics，传空数组
+        await triggerWarningFlow(tabId, tabState);
       } else {
         setIconGreen(tabId, cached.score);
       }
@@ -1591,6 +1586,72 @@ async function _postReportToWorker(reportType, domain, note) {
 
 // ==================== 事件监听 ====================
 
+// 主框架导航开始时进行仅依赖本地数据的高置信预检。
+// webNavigation 事件本身不可阻塞，因此使用导航令牌防止异步读取完成后误伤新导航。
+const _preflightNavigationTokens = new Map();
+
+async function runNavigationPreflight(details) {
+  if (details.frameId !== 0 || shouldSkipUrl(details.url)) return;
+
+  const { tabId, url } = details;
+  const token = Symbol(url);
+  _preflightNavigationTokens.set(tabId, token);
+
+  const settings = await getSettings();
+  if (settings.showWarningWindow === false || _preflightNavigationTokens.get(tabId) !== token) return;
+  if (await isWhitelisted(url) || _preflightNavigationTokens.get(tabId) !== token) return;
+
+  const domain = UrlUtils.extractHostname(url);
+  let verdict = null;
+
+  if (await SiteBlacklist.isBlacklisted(domain)) {
+    verdict = {
+      score: SCORE_SITE_BLACKLIST,
+      correctUrl: '',
+      ruleResults: {
+        siteBlacklist: {
+          triggered: true,
+          score: SCORE_SITE_BLACKLIST,
+          detail: '站点黑名单命中',
+          detailCN: '站点黑名单: 用户已标记为恶意网站'
+        }
+      }
+    };
+  } else {
+    const cached = await CacheManager.get(domain);
+    if (cached && cached.isMalicious) {
+      verdict = {
+        score: cached.score,
+        correctUrl: cached.correctUrl || '',
+        ruleResults: cached.ruleResults || {}
+      };
+    }
+  }
+
+  if (!verdict || _preflightNavigationTokens.get(tabId) !== token) return;
+
+  const tabState = await loadTabState(tabId);
+  tabState.url = url;
+  tabState.domain = domain;
+  tabState.score = verdict.score;
+  tabState.correctUrl = verdict.correctUrl;
+  tabState.ruleResults = verdict.ruleResults;
+  tabState.riskLevel = RISK_LEVEL.WARNING;
+  tabState.isAnalyzed = true;
+  tabState.isWhitelisted = false;
+  await saveTabState(tabId, tabState);
+
+  if (_preflightNavigationTokens.get(tabId) !== token) return;
+  setIconRed(tabId);
+  await openWarningPage(tabId, tabState, 'preflight');
+  console.log('[ServiceWorker] 导航预检已在页面显示前拦截:', { domain, score: verdict.score });
+}
+
+chrome.webNavigation.onBeforeNavigate.addListener((details) => {
+  runNavigationPreflight(details).catch(error =>
+    console.error('[ServiceWorker] 导航预检失败:', error));
+});
+
 // 新文档提交后清除上一个页面的认证交互标记；当前页面的 Content Script 会按需重新标记。
 chrome.webNavigation.onCommitted.addListener((details) => {
   if (details.frameId === 0) _authenticationTabs.delete(details.tabId);
@@ -2030,6 +2091,39 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
     }
 
+    case MSG_TYPES.TRUST_BLOCKED_SITE:
+    case 'TRUST_BLOCKED_SITE': {
+      (async () => {
+        const url = message.payload?.url || '';
+        if (shouldSkipUrl(url)) {
+          sendResponse({ success: false, error: 'invalid_url' });
+          return;
+        }
+
+        await addToWhitelist(url);
+        const tabId = sender.tab ? sender.tab.id : null;
+        if (tabId) {
+          const ts = await loadTabState(tabId);
+          ts.url = url;
+          ts.domain = UrlUtils.extractHostname(url);
+          ts.isWhitelisted = true;
+          ts.score = 0;
+          ts.riskLevel = RISK_LEVEL.SAFE;
+          ts.isAnalyzed = true;
+          await saveTabState(tabId, ts);
+          await removeDownloadBlocker(tabId);
+          setIconWhitelist(tabId);
+          _warningCooldown.delete(tabId);
+        }
+
+        sendResponse({ success: true });
+      })().catch(error => {
+        console.error('[ServiceWorker] 信任被拦截网站失败:', error);
+        sendResponse({ success: false, error: error.message });
+      });
+      return true;
+    }
+
     // 下载二次确认：处理用户在确认弹窗中的选择
     case MSG_TYPES.DOWNLOAD_CONFIRMATION:
     case 'DOWNLOAD_CONFIRMATION': {
@@ -2390,6 +2484,7 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
   await clearTabState(tabId);
   _warningCooldown.delete(tabId);
   _authenticationTabs.delete(tabId);
+  _preflightNavigationTokens.delete(tabId);
 });
 
 // 安装/更新

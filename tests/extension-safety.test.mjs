@@ -7,6 +7,8 @@ const manifest = JSON.parse(readFileSync(new URL('../manifest.json', import.meta
 const navigationGuard = readFileSync(new URL('../content/navigation-guard.js', import.meta.url), 'utf8');
 const contentScript = readFileSync(new URL('../content/content-script.js', import.meta.url), 'utf8');
 const serviceWorker = readFileSync(new URL('../background/service-worker.js', import.meta.url), 'utf8');
+const warningHtml = readFileSync(new URL('../warning/warning.html', import.meta.url), 'utf8');
+const warningScript = readFileSync(new URL('../warning/warning.js', import.meta.url), 'utf8');
 
 function sourceBetween(source, startMarker, endMarker) {
   const start = source.indexOf(startMarker);
@@ -150,4 +152,52 @@ test('adding a site to the whitelist removes an existing page blocker', () => {
   );
 
   assert.match(handler, /removeDownloadBlocker\s*\(/);
+});
+
+test('known threats are checked before navigation without inventing page evidence', () => {
+  const preflight = sourceBetween(
+    serviceWorker,
+    'async function runNavigationPreflight',
+    'chrome.webNavigation.onBeforeNavigate.addListener'
+  );
+
+  assert.match(serviceWorker, /chrome\.webNavigation\.onBeforeNavigate\.addListener/);
+  assert.match(preflight, /isWhitelisted\s*\(/);
+  assert.match(preflight, /SiteBlacklist\.isBlacklisted\s*\(/);
+  assert.match(preflight, /CacheManager\.get\s*\(/);
+  assert.match(preflight, /cached\s*&&\s*cached\.isMalicious/);
+  assert.match(preflight, /openWarningPage\(tabId,\s*tabState,\s*['"]preflight['"]\)/);
+  assert.doesNotMatch(preflight, /ScoringEngine\.evaluate/);
+});
+
+test('high-risk responses replace the dangerous tab with the warning page', () => {
+  const warningFlow = sourceBetween(
+    serviceWorker,
+    'async function triggerWarningFlow',
+    'async function injectDownloadBlocker'
+  );
+  const warningPage = sourceBetween(
+    serviceWorker,
+    'async function openWarningPage',
+    '// ==================== 页面分析 ===================='
+  );
+
+  assert.match(warningFlow, /openWarningPage\(tabId,\s*tabState,\s*['"]postload['"]\)/);
+  assert.match(warningPage, /chrome\.tabs\.update\(tabId,\s*\{\s*url:\s*warningUrl/);
+  assert.match(warningPage, /originalUrl/);
+  assert.match(warningPage, /historySteps/);
+});
+
+test('the warning page exposes only safe primary actions and confirms trust', () => {
+  assert.match(warningHtml, /id="btn-back"[^>]*>回退<\/button>/);
+  assert.match(warningHtml, /id="btn-ask-ai"/);
+  assert.match(warningHtml, /doubao\.com/);
+  assert.match(warningHtml, /你确认信任它吗？/);
+  assert.match(warningHtml, /是的，我信任它/);
+  assert.match(warningHtml, /不，我反悔了/);
+  assert.doesNotMatch(warningHtml, /关闭此页面|安全建议|此检测有误/);
+
+  assert.match(warningScript, /https:\/\/www\.doubao\.com\/chat\/\?q=/);
+  assert.match(warningScript, /type:\s*['"]TRUST_BLOCKED_SITE['"]/);
+  assert.match(warningScript, /window\.history\.go\(-historySteps\)/);
 });

@@ -3,85 +3,58 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>安全警告 - 银狐木马检测</title>
+  <title>页面已拦截 - 银狐木马检测</title>
+  <link rel="icon" href="../icons/icon32.png">
   <link rel="stylesheet" href="warning.css">
 </head>
 <body>
-  <div class="warning-container">
-    <!-- 顶部红色标题 -->
-    <div class="warning-header">
-      <div class="warning-icon">
-        <svg viewBox="0 0 24 24" width="40" height="40">
-          <path d="M12 2L1 22h22L12 2z" fill="#fff" opacity=".95"/>
-          <path d="M12 9v5M12 17.5v.5" stroke="#C62828" stroke-width="2.5" stroke-linecap="round"/>
-        </svg>
-      </div>
-      <h1>安全风险警告</h1>
-      <p class="warning-subtitle">银狐木马检测系统</p>
-    </div>
+  <main class="interstitial" aria-labelledby="warning-title">
+    <header class="brand" aria-label="银狐木马检测">
+      <img src="../icons/icon48.png" width="28" height="28" alt="">
+      <span>银狐木马检测</span>
+    </header>
 
-    <!-- 风险摘要 -->
-    <div class="risk-summary">
-      <div class="risk-badge danger">
-        <span class="risk-label">风险评分</span>
-        <span class="risk-score" id="risk-score">--</span>
-      </div>
-      <div class="risk-message">
-        <strong>该网站被识别为疑似钓鱼/恶意网站！</strong>
-        <p>请勿输入任何个人信息、账号密码或进行支付操作。</p>
-      </div>
-    </div>
+    <section class="warning-content">
+      <div class="risk-rule" aria-hidden="true"></div>
+      <h1 id="warning-title">这个页面已被拦截</h1>
+      <p class="summary">银狐在你继续访问前发现了高风险信号。为保护账号和文件安全，页面内容没有继续显示。</p>
 
-    <!-- 网站信息 -->
-    <div class="info-section">
-      <div class="info-row">
-        <span class="info-label">当前网站</span>
-        <span class="info-value danger-text" id="info-domain">--</span>
+      <div class="site" aria-label="被拦截的网站">
+        <span>被拦截的网站</span>
+        <strong id="info-domain">正在读取</strong>
       </div>
-      <div class="info-row">
-        <span class="info-label">检测时间</span>
-        <span class="info-value" id="info-time">--</span>
+
+      <div class="actions" aria-label="安全操作">
+        <button id="btn-back" class="button button-primary" type="button">回退</button>
+        <button id="btn-ask-ai" class="button button-secondary" type="button">
+          <span>询问 AI</span>
+          <small>doubao.com</small>
+        </button>
       </div>
-    </div>
 
-    <!-- 官方网站链接 -->
-    <div class="official-section" id="official-section" style="display:none;">
-      <div class="official-header">
-        <svg viewBox="0 0 20 20" width="16" height="16" style="vertical-align:middle;margin-right:4px;"><circle cx="10" cy="10" r="9" fill="#4CAF50"/><path d="M6 10l3 3 5-5" stroke="white" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        推荐的官方网站
+      <button id="btn-review-trust" class="trust-link" type="button">我仍然信任这个网站</button>
+      <p id="page-status" class="status" role="status" aria-live="polite"></p>
+    </section>
+  </main>
+
+  <dialog id="trust-dialog" class="trust-dialog" aria-labelledby="trust-title" aria-describedby="trust-description">
+    <div class="dialog-body">
+      <h2 id="trust-title">你确认信任它吗？</h2>
+      <p id="trust-description">信任后，银狐将允许这个网站继续打开，并跳过后续检测。</p>
+
+      <div class="score-panel">
+        <span>威胁评分</span>
+        <strong id="risk-score">0</strong>
       </div>
-      <div class="official-domain" id="official-domain">--</div>
-      <a id="official-btn" class="btn-official" href="#" target="_blank">
-        前往官方网站
-        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:middle;margin-left:4px;"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-      </a>
-    </div>
+      <p class="dialog-domain" id="dialog-domain">正在读取</p>
 
-    <!-- 安全建议 -->
-    <div class="tips-section">
-      <h3>
-        <svg viewBox="0 0 24 24" width="16" height="16" fill="#C62828" style="vertical-align:middle;margin-right:4px;"><circle cx="12" cy="12" r="10" fill="#F44336" opacity=".2"/><path d="M12 8v5M12 16.5v.5" stroke="#C62828" stroke-width="2" stroke-linecap="round"/></svg>
-        安全建议
-      </h3>
-      <ul>
-        <li>不要在可疑网站输入任何个人信息</li>
-        <li>不要下载或运行该网站的任何文件</li>
-        <li>不要在该网站进行登录或支付操作</li>
-        <li>建议立即关闭可疑页面</li>
-        <li>通过官方渠道或应用商店下载软件</li>
-      </ul>
+      <div class="dialog-actions">
+        <button id="btn-confirm-trust" class="button button-danger" type="button">是的，我信任它</button>
+        <button id="btn-cancel-trust" class="button button-quiet" type="button">不，我反悔了</button>
+      </div>
+      <p id="dialog-status" class="status" role="status" aria-live="polite"></p>
     </div>
-
-    <!-- 底部操作 -->
-    <div class="actions">
-      <button id="btn-close" class="btn-secondary">关闭此页面</button>
-      <button id="btn-back-safe" class="btn-primary">返回安全页面</button>
-    </div>
-    <div class="report-actions">
-      <button id="btn-report-false" class="btn-report" title="如果此检测有误，请点击此处上报">⚠ 此检测有误（误报）</button>
-    </div>
-    <p class="auto-close-countdown" id="auto-close-countdown"></p>
-  </div>
+  </dialog>
 
   <script src="warning.js"></script>
 </body>

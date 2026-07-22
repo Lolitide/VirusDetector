@@ -1,161 +1,134 @@
 /**
- * 银狐木马检测 - 警告窗口控制器
- *
- * 职责：
- * - 从 URL 参数读取检测结果并渲染警告界面
- * - 处理关闭危险页面、跳转安全页面的用户操作
+ * 银狐木马检测拦截页控制器。
+ * 负责安全回退、向豆包携带上下文提问，以及二次确认后的白名单放行。
  */
 (function () {
   'use strict';
 
-  /**
-   * 验证 URL 协议，仅允许 http/https，防止 javascript: 等注入
-   * @param {string} url
-   * @returns {string} 安全 URL，无效时返回空字符串
-   */
   function sanitizeUrl(url) {
     if (!url || typeof url !== 'string') return '';
     try {
-      const u = new URL(url);
-      if (u.protocol === 'http:' || u.protocol === 'https:') return url;
-    } catch (e) { /* fall through */ }
-    return '';
+      const parsed = new URL(url);
+      return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.href : '';
+    } catch (error) {
+      return '';
+    }
   }
 
-  // 从 URL 参数读取后台传入的检测结果
   const params = new URLSearchParams(window.location.search);
   const domain = params.get('domain') || '未知网站';
-  const score = parseInt(params.get('score'), 10) || 0;
+  const score = Math.max(0, parseInt(params.get('score'), 10) || 0);
   const correctUrl = sanitizeUrl(params.get('correctUrl') || '');
-  const officialName = params.get('officialName') || '';
+  const fallbackUrl = sanitizeUrl('https://' + domain);
+  const originalUrl = sanitizeUrl(params.get('originalUrl') || '') || fallbackUrl;
+  const reasons = (params.get('reasons') || '').trim();
+  const historySteps = Math.min(2, Math.max(1, parseInt(params.get('historySteps'), 10) || 1));
 
-  // 渲染基本信息
-  document.getElementById('risk-score').textContent = score;
-  document.getElementById('info-domain').textContent = domain;
-  document.getElementById('info-time').textContent = new Date().toLocaleString('zh-CN');
+  const domainEl = document.getElementById('info-domain');
+  const dialogDomainEl = document.getElementById('dialog-domain');
+  const scoreEl = document.getElementById('risk-score');
+  const pageStatusEl = document.getElementById('page-status');
+  const dialogStatusEl = document.getElementById('dialog-status');
+  const trustDialog = document.getElementById('trust-dialog');
+  const confirmTrustButton = document.getElementById('btn-confirm-trust');
 
-  // 如果有正确的官方网站地址则展示链接区域
-  if (correctUrl) {
-    document.getElementById('official-section').style.display = 'block';
-    document.getElementById('official-domain').textContent = correctUrl;
-    document.getElementById('official-btn').href = correctUrl;
+  domainEl.textContent = domain;
+  dialogDomainEl.textContent = domain;
+  scoreEl.textContent = String(score);
+
+  function setPageStatus(message) {
+    pageStatusEl.textContent = message || '';
   }
 
-  /**
-   * 关闭匹配危险域名的所有标签页
-   * @param {string} targetDomain - 需要关闭的域名
-   * @returns {Promise<number>} 关闭的标签页数量
-   */
-  async function closeDangerousTabs(targetDomain) {
-    try {
-      // 去掉 www. 前缀以扩大匹配范围
-      const cleanDomain = targetDomain.replace(/^www\./i, '');
-      const allTabs = await chrome.tabs.query({});
-      const targets = allTabs.filter(tab => {
-        try {
-          const host = new URL(tab.url || '').hostname.replace(/^www\./i, '');
-          return host === cleanDomain || host.endsWith('.' + cleanDomain);
-        } catch (e) { return false; }
-      });
-
-      if (targets.length > 0) {
-        await chrome.tabs.remove(targets.map(t => t.id));
-      }
-      return targets.length;
-    } catch (e) {
-      console.error('[Warning] 关闭危险标签页失败:', e);
-      return 0;
-    }
-  }
-
-  /**
-   * 打开安全页面
-   * @param {string} url - 目标 URL
-   */
-  async function openSafePage(url) {
-    try {
-      // 在当前窗口创建一个新标签页打开安全页面
-      const existingTabs = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (existingTabs.length > 0) {
-        await chrome.tabs.create({ url, index: existingTabs[0].index + 1 });
-      } else {
-        await chrome.tabs.create({ url });
-      }
-    } catch (e) {
-      console.error('[Warning] 打开安全页面失败:', e);
-    }
-  }
-
-  // ---- 按钮事件 ----
-
-  // 关闭此页面：关闭所有危险标签页，然后关闭警告弹窗
-  document.getElementById('btn-close').addEventListener('click', async () => {
-    await closeDangerousTabs(domain);
-    window.close();
-  });
-
-  // 返回安全页面：先关闭所有危险标签页，再打开正确官网，最后关闭警告弹窗
-  // 仅当 correctUrl 通过 sanitizeUrl 验证后才打开，否则仅关闭危险标签页和弹窗
-  document.getElementById('btn-back-safe').addEventListener('click', async () => {
-    clearAutoClose();
-    await closeDangerousTabs(domain);
-    if (correctUrl) {
-      await openSafePage(correctUrl);
-    }
-    window.close();
-  });
-
-  // ---- 自动关闭 ----
-
-  // 30 秒倒计时后自动关闭警告弹窗，用户点击任意按钮则取消倒计时
-  const AUTO_CLOSE_SECONDS = 30;
-  let remaining = AUTO_CLOSE_SECONDS;
-  const countdownEl = document.getElementById('auto-close-countdown');
-
-  function renderCountdown() {
-    if (countdownEl) {
-      countdownEl.textContent = `本提示将在 ${remaining} 秒后自动关闭`;
-    }
-  }
-
-  function clearAutoClose() {
-    clearInterval(autoCloseTimer);
-    if (countdownEl) countdownEl.textContent = '';
-  }
-
-  renderCountdown();
-  const autoCloseTimer = setInterval(() => {
-    remaining -= 1;
-    if (remaining <= 0) {
-      clearAutoClose();
-      window.close();
+  async function moveCurrentTab(url) {
+    const currentTab = await chrome.tabs.getCurrent();
+    if (currentTab && currentTab.id) {
+      await chrome.tabs.update(currentTab.id, { url });
       return;
     }
-    renderCountdown();
-  }, 1000);
-
-  // 关闭按钮也取消倒计时（事件已绑定，补充清理）
-  document.getElementById('btn-close').addEventListener('click', clearAutoClose);
-
-  // ---- 误报上报 ----
-  const reportFalseBtn = document.getElementById('btn-report-false');
-  if (reportFalseBtn) {
-    reportFalseBtn.addEventListener('click', async () => {
-      reportFalseBtn.disabled = true;
-      reportFalseBtn.textContent = '上报中...';
-      try {
-        await chrome.runtime.sendMessage({
-          type: 'SUBMIT_REPORT',
-          payload: { reportType: 'false_positive', domain, note: '' }
-        });
-        reportFalseBtn.textContent = '✅ 已上报为误报，感谢反馈';
-        // 3秒后关闭
-        setTimeout(() => window.close(), 3000);
-      } catch (e) {
-        console.error('[Warning] 误报上报失败:', e);
-        reportFalseBtn.textContent = '上报失败，请重试';
-        reportFalseBtn.disabled = false;
-      }
-    });
+    window.location.replace(url);
   }
+
+  async function returnToSafety() {
+    setPageStatus('正在返回安全页面');
+
+    if (window.history.length > historySteps) {
+      window.history.go(-historySteps);
+      return;
+    }
+
+    try {
+      await moveCurrentTab(correctUrl || 'chrome://newtab/');
+    } catch (error) {
+      window.close();
+    }
+  }
+
+  function buildAiPrompt() {
+    const lines = [
+      '银狐木马检测扩展拦截了一个网站，请帮我判断它是否安全。',
+      '网站：' + (originalUrl || domain),
+      '威胁评分：' + score + ' 分'
+    ];
+    if (reasons) lines.push('命中信号：' + reasons);
+    lines.push('请分析它可能存在的风险，并告诉我是否应该继续访问。不要打开或执行该网站提供的文件。');
+    return lines.join('\n');
+  }
+
+  async function askAi() {
+    const prompt = buildAiPrompt();
+    const doubaoUrl = 'https://www.doubao.com/chat/?q=' + encodeURIComponent(prompt);
+    setPageStatus('正在打开豆包，问题已复制');
+
+    try {
+      await navigator.clipboard.writeText(prompt);
+    } catch (error) {
+      // URL 仍会携带问题，剪贴板仅作为兼容兜底。
+    }
+
+    try {
+      await chrome.tabs.create({ url: doubaoUrl, active: true });
+      setPageStatus('');
+    } catch (error) {
+      setPageStatus('无法打开豆包，请稍后重试');
+    }
+  }
+
+  async function trustSite() {
+    if (!originalUrl) {
+      dialogStatusEl.textContent = '无法确认原始网址，请返回安全页面';
+      return;
+    }
+
+    confirmTrustButton.disabled = true;
+    dialogStatusEl.textContent = '正在保存信任设置';
+
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: 'TRUST_BLOCKED_SITE',
+        payload: { url: originalUrl, domain, score }
+      });
+      if (!response || response.success !== true) {
+        throw new Error(response && response.error ? response.error : 'unknown_error');
+      }
+      window.location.replace(originalUrl);
+    } catch (error) {
+      confirmTrustButton.disabled = false;
+      dialogStatusEl.textContent = '保存失败，请重试或返回安全页面';
+    }
+  }
+
+  document.getElementById('btn-back').addEventListener('click', returnToSafety);
+  document.getElementById('btn-ask-ai').addEventListener('click', askAi);
+  document.getElementById('btn-review-trust').addEventListener('click', () => {
+    dialogStatusEl.textContent = '';
+    trustDialog.showModal();
+  });
+  document.getElementById('btn-confirm-trust').addEventListener('click', trustSite);
+  document.getElementById('btn-cancel-trust').addEventListener('click', returnToSafety);
+
+  trustDialog.addEventListener('cancel', event => {
+    event.preventDefault();
+    returnToSafety();
+  });
 })();
