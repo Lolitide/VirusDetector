@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="zh-CN" style="display: none">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>简单配置一下 | 银狐木马检测</title>
+  <link rel="icon" href="../icons/icon32.png">
+  <script src="../popup/theme-init.js"></script>
+  <link rel="stylesheet" href="onboarding.css">
+</head>
+<body>
+  <main class="onboarding-layout">
+    <section class="license-visual" aria-label="MIT 协议">
+      <div class="license-copy" lang="en">
+        <h2>MIT License</h2>
+        <p>Copyright (c) 2026 酪酪肽Lolitide</p>
+        <p>Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:</p>
+        <p>The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.</p>
+        <p>THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.</p>
+      </div>
+    </section>
+
+    <section class="setup-panel" aria-labelledby="setup-title">
+      <header class="setup-header">
+        <h1 id="setup-title">简单配置一下</h1>
+        <button class="text-link" id="open-options" type="button">更多设置</button>
+        <p>右键配置项可展开详细选项</p>
+      </header>
+
+      <div class="settings-list">
+        <article class="setting-row" tabindex="0" aria-expanded="false">
+          <div class="setting-main">
+            <span class="setting-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M4 19V9M12 19V5M20 19v-7"/><path d="M1 9h6M9 5h6M17 12h6"/></svg>
+            </span>
+            <div class="setting-copy">
+              <h2>选择强度</h2>
+              <p>决定检测的敏感程度，标准模式适合大多数人。</p>
+            </div>
+            <div class="strength-control" role="radiogroup" aria-label="检测强度">
+              <button type="button" data-preset="low" role="radio">低</button>
+              <button type="button" data-preset="medium" role="radio">标准</button>
+              <button type="button" data-preset="high" role="radio">严格</button>
+            </div>
+          </div>
+          <div class="setting-detail">
+            <div class="setting-detail-inner">
+              <p id="strength-description" class="detail-note"></p>
+            </div>
+          </div>
+        </article>
+
+        <article class="setting-row" tabindex="0" aria-expanded="false">
+          <div class="setting-main">
+            <span class="setting-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>
+            </span>
+            <div class="setting-copy">
+              <h2>阻止高风险网页</h2>
+              <p>确认风险后切换到安全拦截页，停止继续访问。</p>
+            </div>
+            <label class="switch" aria-label="阻止高风险网页">
+              <input type="checkbox" data-key="showWarningWindow">
+              <span></span>
+            </label>
+          </div>
+          <div class="setting-detail">
+            <div class="setting-detail-inner">
+              <label class="detail-option">
+                <span><strong>显示检查详情</strong><small>在报告中展示规则结果与分值</small></span>
+                <span class="switch switch-small"><input type="checkbox" data-key="showDetectionDetails"><span></span></span>
+              </label>
+            </div>
+          </div>
+        </article>
+
+        <article class="setting-row" tabindex="0" aria-expanded="false">
+          <div class="setting-main">
+            <span class="setting-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
+            </span>
+            <div class="setting-copy">
+              <h2>下载保护</h2>
+              <p>在高风险页面监控下载行为，拦截可疑文件。</p>
+            </div>
+            <label class="switch" aria-label="下载保护">
+              <input type="checkbox" data-key="downloadInjection">
+              <span></span>
+            </label>
+          </div>
+          <div class="setting-detail">
+            <div class="setting-detail-inner detail-stack">
+              <label class="detail-option">
+                <span><strong>检查非压缩文件</strong><small>同时检查可执行文件和脚本</small></span>
+                <span class="switch switch-small"><input type="checkbox" data-key="detectNonArchiveFiles"><span></span></span>
+              </label>
+              <label class="detail-option">
+                <span><strong>下载劫持检测</strong><small>识别下载链接被替换的情况</small></span>
+                <span class="switch switch-small"><input type="checkbox" data-key="hijackDetection"><span></span></span>
+              </label>
+            </div>
+          </div>
+        </article>
+
+        <article class="setting-row" tabindex="0" aria-expanded="false">
+          <div class="setting-main">
+            <span class="setting-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"/></svg>
+            </span>
+            <div class="setting-copy">
+              <h2>域名与页面核验</h2>
+              <p>识别仿冒域名，并检查页面结构和异常链接。</p>
+            </div>
+            <label class="switch" aria-label="域名仿冒检测">
+              <input type="checkbox" data-key="rule1Enabled">
+              <span></span>
+            </label>
+          </div>
+          <div class="setting-detail">
+            <div class="setting-detail-inner detail-stack">
+              <label class="detail-option">
+                <span><strong>链接分析</strong><small>检查死链、重复链接与异常跳转</small></span>
+                <span class="switch switch-small"><input type="checkbox" data-key="rule4Enabled"><span></span></span>
+              </label>
+              <label class="detail-option">
+                <span><strong>页面结构检测</strong><small>识别批量生成的可疑页面</small></span>
+                <span class="switch switch-small"><input type="checkbox" data-key="rule5Enabled"><span></span></span>
+              </label>
+            </div>
+          </div>
+        </article>
+
+        <article class="setting-row" tabindex="0" aria-expanded="false">
+          <div class="setting-main">
+            <span class="setting-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M5 21V7l7-4 7 4v14"/><path d="M9 21v-5h6v5M9 9h.01M15 9h.01M9 12h.01M15 12h.01"/></svg>
+            </span>
+            <div class="setting-copy">
+              <h2>ICP备案核验</h2>
+              <p>核对中国大陆网站的备案信息，降低伪造风险。</p>
+            </div>
+            <label class="switch" aria-label="ICP备案核验">
+              <input type="checkbox" data-key="icpApiEnabled">
+              <span></span>
+            </label>
+          </div>
+          <div class="setting-detail">
+            <div class="setting-detail-inner detail-stack">
+              <label class="detail-option">
+                <span><strong>主数据源</strong><small>使用 uapis.cn 核验备案</small></span>
+                <span class="switch switch-small"><input type="checkbox" data-key="icpApiProviderUapis"><span></span></span>
+              </label>
+              <label class="detail-option">
+                <span><strong>备用数据源</strong><small>主数据源不可用时使用 apihz.cn</small></span>
+                <span class="switch switch-small"><input type="checkbox" data-key="icpApiProviderApihz"><span></span></span>
+              </label>
+            </div>
+          </div>
+        </article>
+
+        <article class="setting-row" tabindex="0" aria-expanded="false">
+          <div class="setting-main">
+            <span class="setting-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/></svg>
+            </span>
+            <div class="setting-copy">
+              <h2>桌面风险提醒</h2>
+              <p>网站被标记为高风险时发送系统通知。</p>
+            </div>
+            <label class="switch" aria-label="桌面风险提醒">
+              <input type="checkbox" data-key="desktopNotifications">
+              <span></span>
+            </label>
+          </div>
+          <div class="setting-detail">
+            <div class="setting-detail-inner">
+              <p class="detail-note">通知仅在达到高风险阈值后发送，不会用于广告或推广。</p>
+            </div>
+          </div>
+        </article>
+      </div>
+
+      <aside class="contribute-note">
+        <span class="setting-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        </span>
+        <div>
+          <h2>帮助我们一起成长</h2>
+          <p>我们欢迎你在 GitHub 提交建议、问题和代码，一起让 VirusDetector 变得更可靠。</p>
+        </div>
+      </aside>
+    </section>
+  </main>
+
+  <nav class="resource-strip" aria-label="项目资源">
+    <button class="resource-link" type="button" data-url="https://github.com/Lolitide/VirusDetector">
+      <span class="resource-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3.3-.4 6.8-1.6 6.8-7A5.4 5.4 0 0 0 19.4 4 5 5 0 0 0 19.3.5S18.2.1 15 1.8a13.4 13.4 0 0 0-7 0C4.8.1 3.7.5 3.7.5A5 5 0 0 0 3.6 4a5.4 5.4 0 0 0-1.4 3.7c0 5.4 3.5 6.6 6.8 7A4.8 4.8 0 0 0 8 18v4"/><path d="M8 19c-3 .9-3-1.5-4-2"/></svg>
+      </span>
+      <span class="resource-title">GitHub 仓库</span>
+    </button>
+    <button class="resource-link" type="button" data-url="https://www.bilibili.com/video/BV1B5Kj6bEmk/?share_source=copy_web&amp;vd_source=1566cd3cc035bfea01f2dd7572b97802">
+      <span class="resource-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M8 3 6 6M16 3l2 3"/><rect x="3" y="6" width="18" height="14" rx="3"/><path d="M8 11v4M16 11v4"/></svg>
+      </span>
+      <span class="resource-title">讨论</span>
+    </button>
+    <button class="resource-link" id="version-link" type="button">
+      <span class="resource-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v6l4 2"/></svg>
+      </span>
+      <span class="resource-title">最新版本</span>
+      <span class="resource-meta" id="version-status" aria-live="polite">正在检查</span>
+    </button>
+    <button class="resource-link" type="button" disabled>
+      <span class="resource-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M4 7h16v13H4zM2 7l2-4h16l2 4M9 11h6"/></svg>
+      </span>
+      <span class="resource-title">敬请期待</span>
+    </button>
+  </nav>
+
+  <script type="module" src="onboarding.js"></script>
+</body>
+</html>

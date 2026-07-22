@@ -223,7 +223,8 @@ export const STORAGE_KEYS = {
   DOWNLOAD_BLACKLIST: 'download_blacklist',
   PENDING_DOWNLOADS: 'pending_downloads',
   USER_REPORTS: 'user_reports',
-  UPDATE_INFO: 'update_info'
+  UPDATE_INFO: 'update_info',
+  ONBOARDING_SHOWN: 'onboarding_shown'
 };
 
 // 缓存有效期（毫秒）

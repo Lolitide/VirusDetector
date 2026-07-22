@@ -38,6 +38,7 @@ class SettingsApp {
     // 避免 HTML 中 hardcoded 的 general active 闪烁一帧后再跳转。
     this._renderSidebar();
     await this._loadSettings();
+    this._applyPresetOverrides(this.settings.sensitivityPreset);
     this._applyTheme();
     this._renderSection(this._activeSection);
     this._bindEvents();

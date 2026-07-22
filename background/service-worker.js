@@ -36,7 +36,7 @@ import {
   UPDATE_VERSION_API_URL, UPDATE_CHANNEL, UPDATE_CHECK_TIMEOUT_MS, UPDATE_RETRY_DELAY_MINUTES,
   ICP_API_CONFIG, SCORE_SITE_BLACKLIST
 } from '../utils/constants.js';
-import { SETTINGS_DEFAULTS } from '../utils/settings-schema.js';
+import { SETTINGS_DEFAULTS, SENSITIVITY_PRESETS } from '../utils/settings-schema.js';
 
 // ==================== URL 协议守卫 ====================
 
@@ -491,8 +491,9 @@ async function loadGlobalSettings() {
   try {
     const r = await chrome.storage.local.get(STORAGE_KEYS.GLOBAL_SETTINGS);
     const stored = r[STORAGE_KEYS.GLOBAL_SETTINGS] || {};
-    // 合并默认值：新版本新增的键自动获得默认值
-    return { ...SETTINGS_DEFAULTS, ...stored };
+    const settings = { ...SETTINGS_DEFAULTS, ...stored };
+    const preset = SENSITIVITY_PRESETS[settings.sensitivityPreset];
+    return { ...settings, ...(preset?.overrides || {}) };
   } catch (e) {
     return { ...SETTINGS_DEFAULTS };
   }
@@ -2879,9 +2880,24 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
   _lastCommittedHttpUrls.delete(tabId);
 });
 
+/**
+ * 仅在全新安装后打开一次首启配置页。
+ * @returns {Promise<void>}
+ */
+async function openOnboardingOnce() {
+  const stored = await chrome.storage.local.get(STORAGE_KEYS.ONBOARDING_SHOWN);
+  if (stored[STORAGE_KEYS.ONBOARDING_SHOWN]) return;
+
+  await chrome.tabs.create({ url: chrome.runtime.getURL('onboarding/onboarding.html') });
+  await chrome.storage.local.set({ [STORAGE_KEYS.ONBOARDING_SHOWN]: true });
+}
+
 // 安装/更新
 chrome.runtime.onInstalled.addListener(async (details) => {
   console.log('[ServiceWorker] 扩展已安装/更新:', details.reason);
+  if (details.reason === 'install') {
+    await openOnboardingOnce();
+  }
   if (details.reason === 'update') {
     await CacheManager.clearAll();
     await DownloadBlacklist.cleanup();
