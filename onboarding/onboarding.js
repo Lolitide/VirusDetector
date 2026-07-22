@@ -10,6 +10,7 @@ import {
   SCHEMA_VERSION,
   validateSetting
 } from '../utils/settings-schema.js';
+import { WARNING_INTERVENTION_MODES } from '../utils/warning-intervention.js';
 import { STORAGE_KEYS, MSG_TYPES, UPDATE_CHANNEL } from '../utils/constants.js';
 
 let settings = { ...SETTINGS_DEFAULTS };
@@ -86,6 +87,17 @@ function syncControls() {
     description.textContent = SENSITIVITY_PRESETS[preset]?.description
       || SENSITIVITY_PRESETS.medium.description;
   }
+
+  const intervention = settings.warningInterventionMode || SETTINGS_DEFAULTS.warningInterventionMode;
+  document.querySelectorAll('[data-intervention]').forEach((button) => {
+    button.setAttribute('aria-checked', String(button.dataset.intervention === intervention));
+  });
+
+  const interventionDescription = document.getElementById('intervention-description');
+  if (interventionDescription) {
+    interventionDescription.textContent = WARNING_INTERVENTION_MODES[intervention]?.description
+      || WARNING_INTERVENTION_MODES[SETTINGS_DEFAULTS.warningInterventionMode].description;
+  }
 }
 
 /**
@@ -115,6 +127,13 @@ function toggleDetails(row) {
 
 function bindSettings() {
   document.querySelector('.settings-list')?.addEventListener('click', async (event) => {
+    const interventionButton = event.target.closest('button[data-intervention]');
+    if (interventionButton) {
+      await saveSetting('warningInterventionMode', interventionButton.dataset.intervention);
+      syncControls();
+      return;
+    }
+
     const presetButton = event.target.closest('button[data-preset]');
     if (!presetButton) return;
 

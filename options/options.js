@@ -248,6 +248,30 @@ class SettingsApp {
             </div>
           </div>`;
 
+      case 'intervention': {
+        const options = setting.options || [];
+        const selected = options.find(option => option.value === value) || options[0];
+        const buttons = options.map(option => `
+          <button type="button" class="intervention-choice${option.value === selected?.value ? ' active' : ''}"
+            data-intervention-value="${this._escapeHtml(option.value)}"
+            data-description="${this._escapeHtml(option.description)}"
+            role="radio" aria-checked="${option.value === selected?.value}">${option.label}</button>`
+        ).join('');
+        return `
+          <div class="setting-row intervention-row" data-key="${setting.key}" data-mode="${setting.mode || 'basic'}">
+            <div class="setting-info">
+              <div class="setting-label">${setting.label}</div>
+              <div class="setting-desc">${setting.desc}</div>
+            </div>
+            <div class="setting-control intervention-setting-control">
+              <div class="intervention-segmented" role="radiogroup" aria-label="${setting.label}">
+                ${buttons}
+              </div>
+              <div class="intervention-description" aria-live="polite">${selected?.description || ''}</div>
+            </div>
+          </div>`;
+      }
+
       case 'number':
         return `
           <div class="setting-row" data-key="${setting.key}" data-mode="${setting.mode || 'basic'}">
@@ -333,6 +357,13 @@ class SettingsApp {
         input.value = value;
       }
     }
+
+    const interventionValue = this.settings.warningInterventionMode || SETTINGS_DEFAULTS.warningInterventionMode;
+    container.querySelectorAll('.intervention-choice').forEach(button => {
+      const active = button.dataset.interventionValue === interventionValue;
+      button.classList.toggle('active', active);
+      button.setAttribute('aria-checked', String(active));
+    });
   }
 
   // ==================== 获取有效值（含预设覆盖） ====================
@@ -373,8 +404,27 @@ class SettingsApp {
 
     // click 事件委托
     app.addEventListener('click', (e) => {
-      const target = e.target.closest('.nav-item, [data-section], [data-preset], #import-btn, #export-btn, #reset-btn, .mode-segment, [data-action], #modal-cancel-btn, #modal-confirm-btn, #check-update-btn, #download-update-btn, .theme-seg');
+      const target = e.target.closest('.nav-item, [data-section], [data-preset], #import-btn, #export-btn, #reset-btn, .mode-segment, [data-action], #modal-cancel-btn, #modal-confirm-btn, #check-update-btn, #download-update-btn, .theme-seg, .intervention-choice');
       if (!target) return;
+
+      if (target.matches('.intervention-choice')) {
+        const value = target.dataset.interventionValue;
+        if (value && value !== this.settings.warningInterventionMode) {
+          const control = target.closest('.intervention-setting-control');
+          control?.querySelectorAll('.intervention-choice').forEach(button => {
+            const active = button === target;
+            button.classList.toggle('active', active);
+            button.setAttribute('aria-checked', String(active));
+          });
+          const description = control?.querySelector('.intervention-description');
+          if (description) description.textContent = target.dataset.description || '';
+          this._onSettingChange({
+            dataset: { key: 'warningInterventionMode', type: 'select' },
+            value
+          });
+        }
+        return;
+      }
 
       if (target.matches('.theme-seg')) {
         const themeVal = target.dataset.themeVal;

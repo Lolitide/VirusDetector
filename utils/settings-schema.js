@@ -8,9 +8,14 @@
  * @module settings-schema
  */
 
+import {
+  DEFAULT_WARNING_INTERVENTION_MODE,
+  WARNING_INTERVENTION_MODES
+} from './warning-intervention.js';
+
 // ==================== Schema 版本 ====================
 /** 用于检测旧版本数据并触发迁移 */
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 3;
 
 // ==================== 灵敏度预设 ====================
 /**
@@ -90,7 +95,8 @@ export const SETTINGS_DEFAULTS = {
   theme: 'dark',
   desktopNotifications: true,
   showWarningWindow: true,
-  showDetectionDetails: true,
+  warningInterventionMode: DEFAULT_WARNING_INTERVENTION_MODE,
+  autoOpenRiskReport: false,
 
   // === 检测规则开关 (basic) ===
   rule1Enabled: true,
@@ -168,7 +174,6 @@ export const SETTINGS_DEFAULTS = {
   cache_ttlHours: 24,
   api_timeoutMs: 8000,
   whois_apiIntervalMs: 2100,
-  warning_cooldownMs: 5000,
 
   // === 隐私与数据 (basic) ===
   allowAnonymousReporting: true,
@@ -242,13 +247,23 @@ export const SECTIONS = [
             mode: 'basic'
           },
           {
-            key: 'showWarningWindow', type: 'boolean', label: '警告弹窗',
-            desc: '检测到危险网站时弹出全屏警告窗口',
+            key: 'showWarningWindow', type: 'boolean', label: '安全拦截页总开关',
+            desc: '关闭后始终保留原网页，只显示顶部警告和下载防护',
             mode: 'basic'
           },
           {
-            key: 'showDetectionDetails', type: 'boolean', label: '显示检测详情',
-            desc: '在弹窗中显示每项规则的详细检测结果和分值',
+            key: 'warningInterventionMode', type: 'intervention', label: '恢复原版网页置顶警告',
+            desc: '独立于检测强度，决定达到警告线后何时替换原网页',
+            options: Object.entries(WARNING_INTERVENTION_MODES).map(([value, mode]) => ({
+              value,
+              label: mode.label,
+              description: mode.description
+            })),
+            mode: 'basic'
+          },
+          {
+            key: 'autoOpenRiskReport', type: 'boolean', label: '自动显示安全报告',
+            desc: '仅识别到高风险时自动打开；安全页面不会自动打开，手动查看报告不受影响',
             mode: 'basic'
           }
         ]
@@ -511,7 +526,6 @@ export const SECTIONS = [
         iconSVG: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>',
         mode: 'hidden',
         settings: [
-          { key: 'warning_cooldownMs', type: 'number', label: '警告冷却期(ms)', desc: '同一标签页两次警告之间的最小间隔', min: 1000, max: 30000, step: 500, mode: 'advanced' }
         ]
       }
     ]
@@ -612,7 +626,7 @@ export const SECTIONS = [
         settings: [
           {
             key: 'scoreThreshold', type: 'number', label: '危险警告阈值',
-            desc: '总分达到此值触发完整警告流程（图标变红+弹窗+拦截）。默认 100',
+            desc: '总分达到此值进入警告状态；拦截页由“原网页置顶警告”档位单独决定。默认 100',
             min: 0, max: 500, step: 5, mode: 'advanced'
           },
           {
@@ -805,14 +819,11 @@ export function validateSetting(key, value) {
         const validThemes = ['dark', 'light', 'auto'];
         return validThemes.includes(value) ? value : def;
       }
-      // select 类型：验证是否在 options 中
-      if (def === 'medium' || def === 'dark' || def === 'custom') {
-        const setting = findSettingMeta(key);
-        if (setting && setting.options) {
-          const validValues = setting.options.map(o => o.value);
-          if (validValues.includes(value)) return value;
-          return def;
-        }
+      // 选项型设置只接受 Schema 中声明的值。
+      const setting = findSettingMeta(key);
+      if (setting?.options) {
+        const validValues = setting.options.map(o => o.value);
+        return validValues.includes(value) ? value : def;
       }
       return String(value);
     default:
@@ -825,8 +836,8 @@ export function validateSetting(key, value) {
  */
 function findSettingMeta(key) {
   for (const section of SECTIONS) {
-    for (const group of section.groups) {
-      for (const setting of group.settings) {
+    for (const group of section.groups || []) {
+      for (const setting of group.settings || []) {
         if (setting.key === key) return setting;
       }
     }

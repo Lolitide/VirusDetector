@@ -55,27 +55,60 @@
           </div>
         </article>
 
+        <article class="setting-row intervention-row" tabindex="0" aria-expanded="false">
+          <div class="setting-main intervention-main">
+            <span class="setting-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"/><path d="M8 4v4M16 10v4M11 16v4"/></svg>
+            </span>
+            <div class="setting-copy">
+              <h2>恢复原版网页置顶警告</h2>
+              <p>达到警告线后，选择何时从顶部警告升级为安全拦截页。</p>
+            </div>
+            <div class="intervention-control" role="radiogroup" aria-label="页面干预方式">
+              <button type="button" data-intervention="absolute" role="radio">绝对</button>
+              <button type="button" data-intervention="low" role="radio">更低</button>
+              <button type="button" data-intervention="balanced" role="radio">均衡</button>
+              <button type="button" data-intervention="high" role="radio">更高</button>
+              <button type="button" data-intervention="replace" role="radio">替代</button>
+            </div>
+          </div>
+          <div class="setting-detail">
+            <div class="setting-detail-inner">
+              <p id="intervention-description" class="detail-note"></p>
+              <p class="detail-note intervention-independent-note">此选项独立于检测强度，不改变网站的风险评分。</p>
+            </div>
+          </div>
+        </article>
+
         <article class="setting-row" tabindex="0" aria-expanded="false">
           <div class="setting-main">
             <span class="setting-icon" aria-hidden="true">
               <svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>
             </span>
             <div class="setting-copy">
-              <h2>阻止高风险网页</h2>
-              <p>确认风险后切换到安全拦截页，停止继续访问。</p>
+              <h2>安全拦截页总开关</h2>
+              <p>关闭后始终保留原网页，只显示顶部警告和下载防护。</p>
             </div>
-            <label class="switch" aria-label="阻止高风险网页">
+            <label class="switch" aria-label="安全拦截页总开关">
               <input type="checkbox" data-key="showWarningWindow">
               <span></span>
             </label>
           </div>
-          <div class="setting-detail">
-            <div class="setting-detail-inner">
-              <label class="detail-option">
-                <span><strong>显示检查详情</strong><small>在报告中展示规则结果与分值</small></span>
-                <span class="switch switch-small"><input type="checkbox" data-key="showDetectionDetails"><span></span></span>
-              </label>
+        </article>
+
+        <article class="setting-row" tabindex="0" aria-expanded="false">
+          <div class="setting-main">
+            <span class="setting-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M5 3h11l3 3v15H5z"/><path d="M16 3v4h4M8 11h8M8 15h8M8 19h5"/></svg>
+            </span>
+            <div class="setting-copy">
+              <h2>自动显示安全报告</h2>
+              <p>仅识别到高风险时自动打开；安全页面不会自动打开，手动查看报告始终可用。</p>
             </div>
+            <label class="switch" aria-label="自动显示安全报告">
+              <input type="checkbox" data-key="autoOpenRiskReport">
+              <span></span>
+            </label>
           </div>
         </article>
 

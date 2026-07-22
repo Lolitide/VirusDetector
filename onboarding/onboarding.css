@@ -223,7 +223,8 @@ body.onboarding-loading .resource-strip {
 .setting-row:focus-visible,
 .text-link:focus-visible,
 .resource-link:focus-visible,
-.strength-control button:focus-visible {
+.strength-control button:focus-visible,
+.intervention-control button:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 3px;
 }
@@ -306,9 +307,48 @@ body.onboarding-loading .resource-strip {
 }
 
 .strength-control button:active,
+.intervention-control button:active,
 .resource-link:not(:disabled):active,
 .text-link:active {
   transform: scale(0.98);
+}
+
+.intervention-main {
+  grid-template-columns: 32px minmax(0, 1fr);
+}
+
+.intervention-control {
+  grid-column: 2 / -1;
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+
+.intervention-control button {
+  min-height: 32px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  cursor: pointer;
+  transition: background-color 160ms ease, color 160ms ease, transform 100ms ease;
+}
+
+.intervention-control button[aria-checked="true"] {
+  background: var(--surface);
+  color: var(--accent-strong);
+  font-weight: 650;
+}
+
+.intervention-independent-note {
+  margin-top: 5px;
+  color: var(--text-tertiary);
 }
 
 .switch {
