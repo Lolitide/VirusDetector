@@ -265,6 +265,17 @@ test('async Whois and ICP results are bound to one document', () => {
   assert.match(whoisUpdate, /tabStateMatchesAnalysisIdentity\(tabState,\s*ctx\)/);
   assert.match(icpUpdate, /isCurrentAnalysisIdentity\(tabId,\s*snapshot\)/);
   assert.match(icpUpdate, /tabStateMatchesAnalysisIdentity\(tabState,\s*snapshot\)/);
+  assert.match(whoisUpdate, /saveAnalysisStateIfCurrent/);
+  assert.match(whoisUpdate, /cacheAnalysisIfCurrent/);
+  assert.match(icpUpdate, /saveAnalysisStateIfCurrent/);
+  assert.match(icpUpdate, /cacheAnalysisIfCurrent/);
+});
+
+test('redirects and same-document navigation keep the current document identity', () => {
+  assert.match(serviceWorker, /navigation\.url\s*=\s*details\.url/);
+  assert.match(serviceWorker, /onHistoryStateUpdated\.addListener/);
+  assert.match(serviceWorker, /onReferenceFragmentUpdated\.addListener/);
+  assert.match(serviceWorker, /handleSameDocumentNavigation/);
 });
 
 test('warning state and reports use the backend blocked context', () => {
@@ -291,6 +302,8 @@ test('whitelist removal uses only the serialized cross-tab reconciliation queue'
 
   assert.match(handler, /syncSiteAccessStateAcrossTabs\(\)/);
   assert.doesNotMatch(handler, /recheckTabAfterWhitelistRemoval/);
+  assert.match(serviceWorker, /url:\s*tabState\.url/);
+  assert.match(serviceWorker, /tabStateMatchesAnalysisIdentity\(tabState,\s*backup\)/);
 });
 
 test('blocked reports fall back to a normal tab when popup creation fails', () => {

@@ -71,3 +71,17 @@ test('shared hosting suffixes never affect sibling hostnames', async () => {
   assert.equal(await SiteAccessManager.isBlacklisted('bob.blogspot.com'), false);
   assert.equal(await SiteAccessManager.isWhitelisted('other.firebaseapp.com'), false);
 });
+
+test('migrates conflicting legacy entries with blacklist priority', async () => {
+  store.whitelist = ['example.com'];
+  store.site_blacklist = {
+    'example.com': { addedAt: 1, addedBy: 'manual', note: '' }
+  };
+  SiteAccessManager.invalidate();
+
+  const state = await SiteAccessManager.getState('example.com');
+
+  assert.equal(state.isWhitelisted, false);
+  assert.equal(state.isBlacklisted, true);
+  assert.deepEqual(store.whitelist, []);
+});

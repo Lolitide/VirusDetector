@@ -566,6 +566,23 @@ async function isCurrentAnalysisTarget(tabId, tabState) {
   return isCurrentAnalysisIdentity(tabId, createAnalysisIdentity(tabState));
 }
 
+async function saveAnalysisStateIfCurrent(tabId, tabState, identity) {
+  if (!await isCurrentAnalysisIdentity(tabId, identity)) return false;
+  await saveTabState(tabId, tabState);
+  return isCurrentAnalysisIdentity(tabId, identity);
+}
+
+async function cacheAnalysisIfCurrent(tabId, identity, domain, data) {
+  if (!await isCurrentAnalysisIdentity(tabId, identity)) return false;
+  const writeToken = createBlockedNonce();
+  await CacheManager.set(domain, { ...data, writeToken });
+  if (await isCurrentAnalysisIdentity(tabId, identity)) return true;
+
+  const cached = await CacheManager.get(domain);
+  if (cached?.writeToken === writeToken) await CacheManager.remove(domain);
+  return false;
+}
+
 /**
  * 触发高危响应：
  * 1. 图标变红（总是执行）
@@ -686,7 +703,10 @@ async function whitelistSite(value, tabId = null) {
 
 function createAnalysisSnapshot(tabState) {
   return {
+    url: tabState.url,
     domain: tabState.domain,
+    navigationGeneration: tabState.navigationGeneration ?? 0,
+    analysisDocumentId: tabState.analysisDocumentId || '',
     score: tabState.score,
     riskLevel: tabState.riskLevel,
     ruleResults: { ...(tabState.ruleResults || {}) },
@@ -698,7 +718,8 @@ function createAnalysisSnapshot(tabState) {
 async function preserveTabAnalysisBeforeWhitelist(tabId, url) {
   const domain = UrlUtils.extractHostname(url);
   const tabState = await loadTabState(tabId);
-  if (tabState._preWhitelistState?.domain === domain) return;
+  if (tabState._preWhitelistState &&
+      tabStateMatchesAnalysisIdentity(tabState, tabState._preWhitelistState)) return;
   if (tabState.domain !== domain || !tabState.isAnalyzed || tabState.isWhitelisted) return;
 
   if (tabState.ruleResults?.siteBlacklist) {
@@ -748,7 +769,7 @@ async function recheckTabAfterWhitelistRemoval(tabId, url) {
     tabState.analysisDocumentId = currentIdentity.analysisDocumentId;
   }
 
-  if (backup && backup.domain === domain) {
+  if (backup && backup.domain === domain && tabStateMatchesAnalysisIdentity(tabState, backup)) {
     tabState.score = backup.score;
     tabState.riskLevel = backup.riskLevel;
     tabState.ruleResults = backup.ruleResults;
@@ -817,7 +838,7 @@ async function releaseBlacklistFromTab(tabId, url, isWarningPage) {
     tabState.analysisDocumentId = currentIdentity.analysisDocumentId;
   }
 
-  if (backup?.domain === domain) {
+  if (backup?.domain === domain && tabStateMatchesAnalysisIdentity(tabState, backup)) {
     tabState.url = url;
     tabState.domain = domain;
     tabState.score = backup.score;
@@ -1371,14 +1392,7 @@ async function analyzePage(tabId, url, domain, pageMetrics, linkMetrics) {
     // 保存当前分析数据备份（如果存在完整的非黑名单分析结果），以便移除黑名单后恢复
     if (tabState.isAnalyzed && tabState.ruleResults && Object.keys(tabState.ruleResults).length > 0
         && !tabState.ruleResults.siteBlacklist && !tabState._preBlacklistState) {
-      tabState._preBlacklistState = {
-        domain: tabState.domain,
-        score: tabState.score,
-        riskLevel: tabState.riskLevel,
-        ruleResults: { ...tabState.ruleResults },
-        correctUrl: tabState.correctUrl,
-        officialName: tabState.officialName
-      };
+      tabState._preBlacklistState = createAnalysisSnapshot(tabState);
     }
     tabState.score = SCORE_SITE_BLACKLIST;
     tabState.riskLevel = RISK_LEVEL.WARNING;
@@ -1582,7 +1596,9 @@ async function _applyWhoisUpdate(ctx, whoisResult) {
     return;
   }
 
-  if (await SiteAccessManager.isWhitelisted(ctx.url)) {
+  const isWhitelisted = await SiteAccessManager.isWhitelisted(ctx.url);
+  if (!await isCurrentAnalysisIdentity(tabId, ctx)) return;
+  if (isWhitelisted) {
     await removeDownloadBlocker(tabId);
     setIconWhitelist(tabId);
     return;
@@ -1607,17 +1623,14 @@ async function _applyWhoisUpdate(ctx, whoisResult) {
   tabState.riskLevel = whoisResult.riskLevel;
   tabState.ruleResults = mergedBreakdown;
   tabState._whoisPending = false;
-  await saveTabState(tabId, tabState);
+  if (!await saveAnalysisStateIfCurrent(tabId, tabState, ctx)) return;
 
-  // 更新缓存
-  await CacheManager.set(domain, {
+  if (!await cacheAnalysisIfCurrent(tabId, ctx, domain, {
     score: newScore,
     isMalicious: whoisResult.isSuspicious,
     correctUrl: correctUrl,
     ruleResults: sanitizeRuleResultsForCache(mergedBreakdown)
-  });
-
-  if (!await isCurrentAnalysisIdentity(tabId, ctx)) return;
+  })) return;
 
   // 仅在分数从低于阈值跨到≥阈值时补触发警告（保守策略：不降级）
   if (newScore >= getEffectiveThreshold('scoreThreshold', SCORE_THRESHOLD) && oldScore < getEffectiveThreshold('scoreThreshold', SCORE_THRESHOLD)) {
@@ -1740,7 +1753,7 @@ async function _applyIcpUpdate(snapshot, icpApi) {
     const mergedBreakdown = { ...(tabState.ruleResults || snapshot.syncBreakdown) };
     mergedBreakdown.rule3 = newRule3;
     tabState.ruleResults = mergedBreakdown;
-    await saveTabState(tabId, tabState);
+    if (!await saveAnalysisStateIfCurrent(tabId, tabState, snapshot)) return;
     console.log('[ServiceWorker] ICP异步核验完成（分数未变）:', {
       domain,
       icpApiResult: icpApi.hasIcp ? '有备案' : '无备案',
@@ -1763,17 +1776,14 @@ async function _applyIcpUpdate(snapshot, icpApi) {
   tabState.ruleResults = mergedBreakdown;
   tabState.riskLevel = safeTotalScore >= getEffectiveThreshold('scoreThreshold', SCORE_THRESHOLD)
     ? RISK_LEVEL.WARNING : RISK_LEVEL.SAFE;
-  await saveTabState(tabId, tabState);
+  if (!await saveAnalysisStateIfCurrent(tabId, tabState, snapshot)) return;
 
-  // 更新缓存
-  await CacheManager.set(domain, {
+  if (!await cacheAnalysisIfCurrent(tabId, snapshot, domain, {
     score: safeTotalScore,
     isMalicious: safeTotalScore >= getEffectiveThreshold('scoreThreshold', SCORE_THRESHOLD),
     correctUrl: snapshot.correctUrl,
     ruleResults: sanitizeRuleResultsForCache(mergedBreakdown)
-  });
-
-  if (!await isCurrentAnalysisIdentity(tabId, snapshot)) return;
+  })) return;
 
   console.log('[ServiceWorker] ICP异步核验完成（分数已更新）:', {
     domain,
@@ -1858,9 +1868,12 @@ async function runNavigationPreflight(details) {
   const generation = details.generation ?? _navigationGenerations.get(tabId) ?? 0;
   const token = Symbol(url);
   _preflightNavigationTokens.set(tabId, token);
-  const isCurrentNavigation = () =>
-    _preflightNavigationTokens.get(tabId) === token &&
-    _navigationGenerations.get(tabId) === generation;
+  const isCurrentNavigation = () => {
+    const navigation = _navigationStates.get(tabId);
+    return _preflightNavigationTokens.get(tabId) === token &&
+      _navigationGenerations.get(tabId) === generation &&
+      navigation?.url === url;
+  };
 
   const settings = await getSettings();
   if (settings.showWarningWindow === false || !isCurrentNavigation()) return;
@@ -1909,6 +1922,7 @@ async function runNavigationPreflight(details) {
   tabState.analysisDocumentId = navigation?.generation === generation
     ? navigation.documentId || ''
     : '';
+  if (!isCurrentNavigation()) return;
   await saveTabState(tabId, tabState);
 
   if (!isCurrentNavigation()) return;
@@ -1941,12 +1955,58 @@ chrome.webNavigation.onBeforeNavigate.addListener((details) => {
 chrome.webNavigation.onCommitted.addListener((details) => {
   if (details.frameId !== 0) return;
   _authenticationTabs.delete(details.tabId);
-  const navigation = _navigationStates.get(details.tabId);
-  if (navigation?.url === details.url) {
-    navigation.committed = true;
-    navigation.documentId = details.documentId || '';
+  let navigation = _navigationStates.get(details.tabId);
+  if (!navigation) {
+    navigation = {
+      generation: _navigationGenerations.get(details.tabId) || 0,
+      previousUrl: _lastCommittedHttpUrls.get(details.tabId) || ''
+    };
+    _navigationStates.set(details.tabId, navigation);
   }
+  navigation.url = details.url;
+  navigation.committed = true;
+  navigation.documentId = details.documentId || '';
   if (!shouldSkipUrl(details.url)) _lastCommittedHttpUrls.set(details.tabId, details.url);
+});
+
+async function handleSameDocumentNavigation(details) {
+  if (details.frameId !== 0 || shouldSkipUrl(details.url)) return;
+
+  let navigation = _navigationStates.get(details.tabId);
+  if (!navigation) {
+    navigation = {
+      generation: _navigationGenerations.get(details.tabId) || 0,
+      previousUrl: _lastCommittedHttpUrls.get(details.tabId) || ''
+    };
+    _navigationStates.set(details.tabId, navigation);
+  }
+  if (navigation.documentId && details.documentId && navigation.documentId !== details.documentId) return;
+
+  navigation.url = details.url;
+  navigation.committed = true;
+  navigation.documentId = details.documentId || navigation.documentId || '';
+  _lastCommittedHttpUrls.set(details.tabId, details.url);
+
+  const tabState = await loadTabState(details.tabId);
+  if (tabState.analysisDocumentId && navigation.documentId &&
+      tabState.analysisDocumentId !== navigation.documentId) return;
+
+  tabState.url = details.url;
+  tabState.domain = UrlUtils.extractHostname(details.url);
+  tabState.navigationGeneration = navigation.generation;
+  tabState.analysisDocumentId = navigation.documentId;
+  tabState.isAnalyzed = false;
+  delete tabState._blockedContext;
+  await saveTabState(details.tabId, tabState);
+  await analyzePage(details.tabId, tabState.url, tabState.domain, null, null);
+}
+
+chrome.webNavigation.onHistoryStateUpdated.addListener(details => {
+  handleSameDocumentNavigation(details).catch(() => {});
+});
+
+chrome.webNavigation.onReferenceFragmentUpdated.addListener(details => {
+  handleSameDocumentNavigation(details).catch(() => {});
 });
 
 // 页面导航完成

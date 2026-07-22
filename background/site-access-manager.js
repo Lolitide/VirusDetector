@@ -167,6 +167,14 @@ export class SiteAccessManager {
         if (domain) this._blacklist[domain] = { ...entry };
       }
     }
+
+    const conflictingDomains = Object.keys(this._blacklist)
+      .filter(domain => this._whitelist.has(domain));
+    if (conflictingDomains.length) {
+      const whitelist = new Set(this._whitelist);
+      for (const domain of conflictingDomains) whitelist.delete(domain);
+      await this._save(whitelist, this._blacklist);
+    }
   }
 
   static async _save(whitelist, blacklist) {

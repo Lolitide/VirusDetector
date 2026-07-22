@@ -91,6 +91,7 @@ export class CacheManager {
           isMalicious: data.isMalicious,
           correctUrl: data.correctUrl || null,
           ruleResults: data.ruleResults || {},
+          writeToken: data.writeToken || null,
           timestamp: Date.now()
         }
       });
