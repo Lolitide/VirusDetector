@@ -112,6 +112,28 @@
     return confirm(message);
   }
 
+  // ==================== 迅雷 (thunder://) 唤起 ====================
+  // 本脚本运行在 MAIN world，无法访问 chrome.storage；
+  // 引擎设置由 content-script(ISOLATED world) 写入 documentElement 的 data-vd-dl-engine 属性
+  function _getDownloadEngine() {
+    try {
+      var v = document.documentElement.getAttribute('data-vd-dl-engine');
+      return v === 'thunder' ? 'thunder' : 'native';
+    } catch (e) {
+      return 'native';
+    }
+  }
+
+  // 将普通 URL 编码为 thunder:// 协议（迅雷官方格式：Base64("AA" + URL + "ZZ")）
+  function _toThunderUrl(url) {
+      const wrapped = "AA" + url + "ZZ";
+      const bytes = new TextEncoder().encode(wrapped);
+      let binary = "";
+      for (const b of bytes) binary += String.fromCharCode(b);
+      const base64 = btoa(binary);
+      return "thunder://" + base64;
+  }
+
   // ==================== 1. Hook window.location 的 setter ====================
 
   // 保存原始的 location 对象引用
@@ -139,6 +161,8 @@
           if (isDangerousUrl(String(val))) {
             if (warnDangerousNavigation(String(val), 'location')) {
               _origLocationSetter.call(window, val);
+            } else if (_getDownloadEngine() === 'thunder') {
+              _origLocationSetter.call(window, _toThunderUrl(val));
             }
             // 用户取消 → 阻止跳转（不调用原始 setter）
           } else {
@@ -162,6 +186,9 @@
     if (url && isDangerousUrl(String(url))) {
       if (!warnDangerousNavigation(String(url), 'window.open')) {
         // 用户取消 → 返回 null（阻止打开）
+        return null;
+      } else if (_getDownloadEngine() === 'thunder') {
+        _origOpen(_toThunderUrl(url))
         return null;
       }
     }

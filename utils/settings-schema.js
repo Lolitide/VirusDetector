@@ -137,6 +137,7 @@ export const SETTINGS_DEFAULTS = {
   // === 下载检测 (advanced) ===
   detectNonArchiveFiles: false,
   hijackDetection: true,
+  downloadEngine: 'native',  // 放行下载时使用的引擎：native(浏览器原生) / thunder(迅雷)
   download_crossDomainScore: 10,
   download_newDomainScore: 10,
   download_blacklistScore: 20,
@@ -364,6 +365,34 @@ export const SECTIONS = [
             key: 'icpApiApiahzKey', type: 'text', label: 'apihz 接口 Key',
             desc: '与上方 ID 配套的 key（在 apihz.cn 申请）。留空使用内置公开凭据。',
             mode: 'advanced', placeholder: '留空 = 使用内置公开凭据'
+          }
+        ]
+      }
+    ]
+  },
+
+  // ========== 2.6 下载器 ==========
+  {
+    id: 'download-engine',
+    label: '下载器',
+    iconSVG: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>',
+    description: '选择「仅此次放行 / 信任并放行」时所使用的下载工具。支持浏览器原生下载、迅雷',
+    mode: 'basic',
+    groups: [
+      {
+        id: 'download-engine-select',
+        label: '默认下载器',
+        iconSVG: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>',
+        mode: 'basic',
+        settings: [
+          {
+            key: 'downloadEngine', type: 'select', label: '下载器',
+            desc: '放行下载时使用的工具：浏览器原生下载 / 迅雷',
+            mode: 'basic',
+            options: [
+              { value: 'native', label: '浏览器原生下载' },
+              { value: 'thunder', label: '迅雷 (thunder://)' }
+            ]
           }
         ]
       }
@@ -800,6 +829,11 @@ export function validateSetting(key, value) {
       return num;
     }
     case 'string':
+      // 下载器值校验：仅允许 native / thunder
+      if (key === 'downloadEngine') {
+        const allowed = ['native', 'thunder'];
+        return allowed.includes(value) ? value : def;
+      }
       // 主题值校验：仅允许 dark / light / auto
       if (key === 'theme') {
         const validThemes = ['dark', 'light', 'auto'];

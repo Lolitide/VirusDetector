@@ -51,6 +51,26 @@
     'input[id*="verification"]'
   ].join(',');
 
+  // ==================== 下载器桥接（→ MAIN world）====================
+  // navigation-guard.js 运行在 MAIN world，无法访问 chrome.storage。
+  // 这里(ISOLATED world)读取用户所选下载器，写入 documentElement 属性，
+  // 供 MAIN world 惰性读取（data-vd-dl-engine：native | thunder）。
+  function _applyDownloadEngineAttr(engine) {
+      document.documentElement.setAttribute('data-vd-dl-engine', engine || 'native');
+  }
+  (function _initDownloadEngineBridge() {
+      chrome.storage.local.get('global_settings', function (r) {
+        var gs = (r && r.global_settings) || {};
+        _applyDownloadEngineAttr(gs.downloadEngine || 'native');
+      });
+      // 设置变更时同步（options 页保存后广播 / storage 直接变更）
+      chrome.storage.onChanged.addListener(function (changes, area) {
+        if (area === 'local' && changes.global_settings && changes.global_settings.newValue) {
+          _applyDownloadEngineAttr(changes.global_settings.newValue.downloadEngine || 'native');
+        }
+      });
+  })();
+
   function isSensitiveAuthenticationUrl(url) {
     try {
       const parsed = new URL(url, window.location.href);
@@ -1180,6 +1200,9 @@
     if (message && message.type === 'UPDATE_SETTINGS') {
       if (message.payload && message.payload.checkDeadLinks !== undefined) {
         _cachedCheckDeadLinks = message.payload.checkDeadLinks;
+      }
+      if (message.payload && message.payload.downloadEngine !== undefined) {
+        _applyDownloadEngineAttr(message.payload.downloadEngine || 'native');
       }
     }
   });

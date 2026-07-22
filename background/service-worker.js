@@ -37,6 +37,7 @@ import {
   ICP_API_CONFIG, SCORE_SITE_BLACKLIST
 } from '../utils/constants.js';
 import { SETTINGS_DEFAULTS } from '../utils/settings-schema.js';
+import { downloadWithEngine, toThunderUrl } from '../utils/downloader.js';
 
 // ==================== URL 协议守卫 ====================
 
@@ -735,6 +736,14 @@ function injectBlockerFunc(archiveUrls, detectNonArchive, mode) {
         )) {
           // 阻止：不触发原始 click
           return;
+        }
+        // 用户放行：交由 background service worker 按所选引擎经 downloadWithEngine 重新下载
+        if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+            chrome.runtime.sendMessage({
+              type: 'VD_DOWNLOAD_VIA_ENGINE',
+              payload: { url: href }
+            });
+            return;
         }
       }
       return _origAnchorClick.call(this);
@@ -1789,7 +1798,7 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
       });
 
       // 弹出二次确认弹窗
-      openDownloadConfirmation(tabState, downloadItem, fileName, downloadDomain, tabId);
+      await openDownloadConfirmation(tabState, downloadItem, fileName, downloadDomain, tabId);
 
       // 更新缓存
       await CacheManager.set(tabState.domain, {
@@ -1817,7 +1826,12 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
  * @param {string} downloadDomain - 下载来源域名
  * @param {number} tabId - 来源标签页 ID
  */
-function openDownloadConfirmation(tabState, downloadItem, fileName, downloadDomain, tabId) {
+async function openDownloadConfirmation(tabState, downloadItem, fileName, downloadDomain, tabId) {
+  // 读取当前下载器，用于在确认窗口中提示用户将使用的工具
+  let engine = 'native';
+  const swSettings = await getSettings();
+  if (swSettings && swSettings.downloadEngine) engine = swSettings.downloadEngine;
+
   const params = new URLSearchParams({
     domain: tabState.domain || '未知',
     score: String(tabState.score || 0),
@@ -1827,7 +1841,8 @@ function openDownloadConfirmation(tabState, downloadItem, fileName, downloadDoma
     tabId: String(tabId),
     downloadId: String(downloadItem.id),
     correctUrl: tabState.correctUrl || '',
-    officialName: tabState.officialName || ''
+    officialName: tabState.officialName || '',
+    engine: engine
   });
 
   chrome.windows.create({
@@ -2030,6 +2045,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
     }
 
+    // 页面拦截脚本(a.click)用户放行后，交由 downloadWithEngine 按所选下载
+    case 'VD_DOWNLOAD_VIA_ENGINE': {
+      (async () => {
+        const { url } = (message.payload || {});
+        if (!url) { sendResponse({ success: false, reason: 'missing_url' }); return; }
+        // 下载器以 options 中的全局设置为准（不信任页面传入，避免被篡改）
+        const swSettings = await getSettings();
+        const eng = (swSettings.downloadEngine === 'thunder') ? 'thunder' : 'native';
+        try {
+          const result = await downloadWithEngine(eng, { url }, swSettings);
+          console.log('[ServiceWorker] 页面放行经引擎下载:', eng, result);
+          sendResponse({ success: true, result });
+        } catch (e) {
+          console.error('[ServiceWorker] 页面放行下载失败:', e);
+          sendResponse({ success: false, error: String(e) });
+        }
+      })();
+      return true;
+    }
+
     // 下载二次确认：处理用户在确认弹窗中的选择
     case MSG_TYPES.DOWNLOAD_CONFIRMATION:
     case 'DOWNLOAD_CONFIRMATION': {
@@ -2037,17 +2072,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const { action, downloadUrl, tabId, downloadId, pageDomain, downloadDomain, filename } = message.payload || {};
         console.log('[ServiceWorker] 下载确认:', action, downloadDomain);
 
+        // 读取用户在 options 中选择的下载器
+        const swSettings = await getSettings();
+        const engine = swSettings.downloadEngine || 'native';
+
         switch (action) {
           case 'allow_once':
-            // 仅此次放行：重新发起下载
+            // 仅此次放行：按所选引擎重新发起下载
             if (downloadUrl) {
               try {
-                await chrome.downloads.download({
+                const result = await downloadWithEngine(engine, {
                   url: downloadUrl,
-                  filename: filename || undefined,
-                  saveAs: false
-                });
-                console.log('[ServiceWorker] 用户选择放行一次，重新发起下载:', downloadUrl);
+                  filename: filename || undefined
+                }, swSettings);
+                console.log('[ServiceWorker] 用户选择放行一次，经引擎下载:', engine, result);
               } catch (e) {
                 console.error('[ServiceWorker] 重新发起下载失败:', e);
               }
@@ -2055,7 +2093,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             break;
 
           case 'trust_site':
-            // 信任网站并放行：将页面域名加入白名单 + 重新发起下载
+            // 信任网站并放行：将页面域名加入白名单 + 按所选引擎重新发起下载
             if (pageDomain) {
               await addToWhitelist('https://' + pageDomain);
               // 更新标签页状态
@@ -2073,12 +2111,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             }
             if (downloadUrl) {
               try {
-                await chrome.downloads.download({
+                const result = await downloadWithEngine(engine, {
                   url: downloadUrl,
-                  filename: filename || undefined,
-                  saveAs: false
-                });
-                console.log('[ServiceWorker] 用户信任网站，白名单+放行下载:', pageDomain);
+                  filename: filename || undefined
+                }, swSettings);
+                console.log('[ServiceWorker] 用户信任网站，白名单+放行下载:', engine, result);
               } catch (e) {
                 console.error('[ServiceWorker] 重新发起下载失败:', e);
               }
