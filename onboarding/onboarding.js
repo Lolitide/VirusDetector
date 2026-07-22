@@ -15,6 +15,44 @@ import { STORAGE_KEYS, MSG_TYPES, UPDATE_CHANNEL } from '../utils/constants.js';
 let settings = { ...SETTINGS_DEFAULTS };
 let latestReleaseUrl = '';
 const systemTheme = window.matchMedia('(prefers-color-scheme: dark)');
+const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+const startupStartedAt = performance.now();
+const startupMinDuration = reducedMotion.matches ? 0 : 420;
+const startupRevealDuration = 280;
+
+async function waitForStartupTransition() {
+  const remaining = startupMinDuration - (performance.now() - startupStartedAt);
+  if (remaining > 0) {
+    await new Promise((resolve) => setTimeout(resolve, remaining));
+  }
+}
+
+function unlockOnboardingContent() {
+  document.querySelectorAll('[data-onboarding-content]').forEach((element) => {
+    element.removeAttribute('inert');
+    element.removeAttribute('aria-hidden');
+  });
+}
+
+function finishStartupTransition() {
+  const transition = document.getElementById('startup-transition');
+  document.body.classList.add('onboarding-ready');
+  document.body.classList.remove('onboarding-loading');
+
+  if (!transition) {
+    unlockOnboardingContent();
+    return;
+  }
+  if (reducedMotion.matches) {
+    unlockOnboardingContent();
+    transition.setAttribute('aria-hidden', 'true');
+    return;
+  }
+  setTimeout(unlockOnboardingContent, startupRevealDuration);
+  transition.addEventListener('transitionend', () => {
+    transition.setAttribute('aria-hidden', 'true');
+  }, { once: true });
+}
 
 /** 应用扩展当前主题，并更新首屏主题缓存。 */
 function applyTheme() {
@@ -206,6 +244,15 @@ chrome.storage.onChanged.addListener((changes, area) => {
   syncControls();
 });
 
-init().catch((error) => {
-  console.error('[Onboarding] 初始化失败:', error);
-});
+async function start() {
+  try {
+    await init();
+  } catch (error) {
+    console.error('[Onboarding] 初始化失败:', error);
+  }
+
+  await waitForStartupTransition();
+  finishStartupTransition();
+}
+
+start();

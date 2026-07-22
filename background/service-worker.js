@@ -508,6 +508,99 @@ const _navigationGenerations = new Map();
 const _navigationStates = new Map();
 const _lastCommittedHttpUrls = new Map();
 const WARNING_COOLDOWN_MS = 5000;
+const RISK_NOTIFICATION_KEY_PREFIX = 'risk_notification:';
+const RISK_NOTIFICATION_TTL_MS = 30 * 60 * 1000;
+const _riskNotificationConsumptions = new Map();
+
+function getRiskNotificationStorage() {
+  return chrome.storage.session || chrome.storage.local;
+}
+
+function getRiskNotificationStorageKey(notificationId) {
+  return RISK_NOTIFICATION_KEY_PREFIX + notificationId;
+}
+
+async function removeRiskNotificationContext(notificationId) {
+  if (!notificationId.startsWith('risk:')) return;
+  await getRiskNotificationStorage()
+    .remove(getRiskNotificationStorageKey(notificationId))
+    .catch(() => {});
+}
+
+/**
+ * 串行取出一次性通知上下文，避免同一通知被重复处理。
+ * @param {string} notificationId 通知 ID
+ * @returns {Promise<Object|null>} 未过期的通知上下文
+ */
+async function takeRiskNotificationContext(notificationId) {
+  if (!notificationId.startsWith('risk:')) return null;
+  const previous = _riskNotificationConsumptions.get(notificationId) || Promise.resolve();
+  const task = previous.catch(() => {}).then(async () => {
+    const storage = getRiskNotificationStorage();
+    const key = getRiskNotificationStorageKey(notificationId);
+    const stored = await storage.get(key);
+    await storage.remove(key);
+    const context = stored[key];
+    if (!context || Date.now() - context.createdAt > RISK_NOTIFICATION_TTL_MS) return null;
+    return context;
+  });
+  _riskNotificationConsumptions.set(notificationId, task);
+  try {
+    return await task;
+  } finally {
+    if (_riskNotificationConsumptions.get(notificationId) === task) {
+      _riskNotificationConsumptions.delete(notificationId);
+    }
+  }
+}
+
+/**
+ * 发送与危险标签页绑定的桌面风险通知。
+ * @param {number} tabId 危险标签页 ID
+ * @param {Object} tabState 当前风险状态
+ * @returns {Promise<boolean>} 通知是否成功创建
+ */
+async function showDesktopRiskNotification(tabId, tabState) {
+  let notificationId = '';
+  try {
+    if (typeof chrome.notifications.getPermissionLevel === 'function') {
+      const permission = await chrome.notifications.getPermissionLevel();
+      if (permission !== 'granted') {
+        console.warn('[ServiceWorker] 桌面通知权限未开启:', permission);
+        return false;
+      }
+    }
+
+    const createdAt = Date.now();
+    notificationId = `risk:${tabId}:${createdAt}`;
+    await getRiskNotificationStorage().set({
+      [getRiskNotificationStorageKey(notificationId)]: {
+        tabId,
+        url: tabState.url || '',
+        domain: tabState.domain || '',
+        correctUrl: tabState.correctUrl || '',
+        navigationGeneration: tabState.navigationGeneration ?? 0,
+        analysisDocumentId: tabState.analysisDocumentId || '',
+        createdAt
+      }
+    });
+    await chrome.notifications.create(notificationId, {
+      type: 'basic',
+      iconUrl: chrome.runtime.getURL('icons/icon128.png'),
+      title: '银狐木马检测 - 风险警告',
+      message: `检测到疑似钓鱼网站: ${tabState.domain}\n风险评分: ${tabState.score}分${tabState.correctUrl ? '\n正确官网: ' + tabState.correctUrl : ''}`,
+      priority: 2,
+      buttons: tabState.correctUrl ? [{ title: '前往官网' }] : [],
+      requireInteraction: true
+    });
+    console.log('[ServiceWorker] 桌面风险通知已发送:', notificationId);
+    return true;
+  } catch (error) {
+    if (notificationId) await removeRiskNotificationContext(notificationId);
+    console.error('[ServiceWorker] 桌面风险通知发送失败:', error);
+    return false;
+  }
+}
 
 /**
  * @param {Object} tabState 标签页状态
@@ -627,8 +720,9 @@ async function cacheAnalysisIfCurrent(tabId, identity, domain, data) {
 /**
  * 触发高危响应：
  * 1. 图标变红（总是执行）
- * 2. 默认将危险标签页替换为扩展内的拦截页
- * 3. 用户关闭拦截页时，降级为下载拦截与桌面通知
+ * 2. 开启桌面提醒时发送系统通知
+ * 3. 默认将危险标签页替换为扩展内的拦截页
+ * 4. 用户关闭拦截页时，降级为下载拦截
  */
 async function triggerWarningFlow(tabId, tabState) {
   if (!await isCurrentAnalysisTarget(tabId, tabState)) {
@@ -646,14 +740,26 @@ async function triggerWarningFlow(tabId, tabState) {
 
   const settings = await getSettings();
 
-  // 2. 默认使用标签页内拦截页，避免危险页面继续留在屏幕上。
+  // 桌面通知与拦截页并行触发，并在同一标签页内避免重复提醒。
+  const cooldownMs = getEffectiveThreshold('warning_cooldownMs', WARNING_COOLDOWN_MS);
+  const lastTime = _warningCooldown.get(tabId) || 0;
+  let notificationTask = Promise.resolve(false);
+  if (settings.desktopNotifications !== false && now - lastTime >= cooldownMs) {
+    _warningCooldown.set(tabId, now);
+    notificationTask = showDesktopRiskNotification(tabId, tabState);
+  }
+
+  // 3. 默认使用标签页内拦截页，避免危险页面继续留在屏幕上。
   if (settings.showWarningWindow !== false) {
-    await openWarningPage(tabId, tabState, 'postload');
+    await Promise.all([
+      openWarningPage(tabId, tabState, 'postload'),
+      notificationTask
+    ]);
     console.log('[ServiceWorker] 已切换到安全拦截页:', { domain, score, correctUrl });
     return;
   }
 
-  // 3. 用户关闭拦截页时，保留原有下载防护与桌面通知作为降级方案。
+  // 4. 用户关闭拦截页时，保留下载防护作为降级方案。
   // 收集已知压缩包链接 URL 列表（用于精准拦截）
   const archiveUrls = [];
   if (tabState.linkMetrics && tabState.linkMetrics.archiveDownloadLinks) {
@@ -668,28 +774,7 @@ async function triggerWarningFlow(tabId, tabState) {
   if (settings.downloadInjection !== false) {
     await injectDownloadBlocker(tabId, archiveUrls);
   }
-
-  // 去重检查：同标签页冷却期内跳过通知和弹窗
-  const cooldownMs = getEffectiveThreshold('warning_cooldownMs', WARNING_COOLDOWN_MS);
-  const lastTime = _warningCooldown.get(tabId) || 0;
-  if (now - lastTime < cooldownMs) {
-    console.log('[ServiceWorker] ⚠️ 冷却期内，跳过重复弹窗:', domain);
-    return;
-  }
-  _warningCooldown.set(tabId, now);
-
-  // 桌面通知（可通过设置关闭）
-  if (settings.desktopNotifications !== false) {
-    chrome.notifications.create({
-      type: 'basic',
-      iconUrl: 'icons/icon128.png',
-      title: '⚠️ 银狐木马检测 - 风险警告',
-      message: `检测到疑似钓鱼网站: ${domain}\n风险评分: ${score}分${correctUrl ? '\n正确官网: ' + correctUrl : ''}`,
-      priority: 2,
-      buttons: correctUrl ? [{ title: '✅ 前往官网' }] : [],
-      requireInteraction: true
-    }).catch(() => {});
-  }
+  await notificationTask;
 
   console.log('[ServiceWorker] ⚠️ 高危响应已触发:', { domain, score, correctUrl });
 }
@@ -1359,6 +1444,8 @@ async function openWarningPage(tabId, tabState, stage = 'postload') {
     reasons,
     safeUrl,
     stage,
+    navigationGeneration: tabState.navigationGeneration ?? 0,
+    analysisDocumentId: tabState.analysisDocumentId || '',
     createdAt: Date.now()
   };
   tabState._blockedContext = blockedContext;
@@ -2838,35 +2925,49 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return false;
 });
 
-// 通知按钮：点击"前往官网" → 关闭危险标签页 + 打开正确官网
-chrome.notifications.onButtonClicked.addListener(async (notifId, btnIdx) => {
-  if (btnIdx === 0) {
-    // 获取当前活跃标签页的状态信息
-    const activeTabs = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (activeTabs.length === 0) return;
-    const ts = await loadTabState(activeTabs[0].id);
-
-    // 查找并关闭包含危险域名的所有标签页
-    const domain = ts?.domain || '';
-    if (domain) {
-      const cleanDomain = domain.replace(/^www\./i, '');
-      const allTabs = await chrome.tabs.query({});
-      const dangerTabs = allTabs.filter(tab => {
-        try {
-          const host = new URL(tab.url || '').hostname.replace(/^www\./i, '');
-          return host === cleanDomain || host.endsWith('.' + cleanDomain);
-        } catch (e) { return false; }
-      });
-      if (dangerTabs.length > 0) {
-        await chrome.tabs.remove(dangerTabs.map(t => t.id)).catch(() => {});
-      }
-    }
-
-    // 打开官方正确网址
-    if (ts?.correctUrl) {
-      chrome.tabs.create({ url: ts.correctUrl }).catch(() => {});
-    }
+/**
+ * 校验通知生成时的页面身份，并处理“前往官网”操作。
+ * @param {string} notificationId 通知 ID
+ * @param {number} buttonIndex 按钮索引
+ * @returns {Promise<void>}
+ */
+async function handleRiskNotificationButton(notificationId, buttonIndex) {
+  if (buttonIndex !== 0) return;
+  const context = await takeRiskNotificationContext(notificationId);
+  if (!context) {
+    await chrome.notifications.clear(notificationId).catch(() => {});
+    return;
   }
+
+  const tab = await chrome.tabs.get(context.tabId).catch(() => null);
+  const tabState = tab ? await loadTabState(context.tabId) : null;
+  const sameDocument = tabState && tabStateMatchesAnalysisIdentity(tabState, context);
+  const blockedContext = tabState?._blockedContext;
+  const stillOriginalPage = tab?.url === context.url;
+  const stillMatchingWarningPage = isWarningPageUrl(tab?.url || '') &&
+    blockedContext?.url === context.url &&
+    blockedContext?.domain === context.domain &&
+    blockedContext?.navigationGeneration === context.navigationGeneration &&
+    blockedContext?.analysisDocumentId === context.analysisDocumentId;
+  const hasPendingNavigation = Boolean(tab?.pendingUrl);
+  const currentOriginalDocument = sameDocument && stillOriginalPage && !hasPendingNavigation
+    ? await isCurrentAnalysisIdentity(context.tabId, context)
+    : false;
+
+  if (currentOriginalDocument || (sameDocument && stillMatchingWarningPage && !hasPendingNavigation)) {
+    await chrome.tabs.remove(context.tabId).catch(() => {});
+  }
+  if (context.correctUrl && !shouldSkipUrl(context.correctUrl)) {
+    await chrome.tabs.create({ url: context.correctUrl }).catch(() => {});
+  }
+  await chrome.notifications.clear(notificationId).catch(() => {});
+}
+
+// 通知按钮：仅处理生成通知时对应的危险标签页。
+chrome.notifications.onButtonClicked.addListener((notificationId, buttonIndex) => {
+  handleRiskNotificationButton(notificationId, buttonIndex).catch(error => {
+    console.error('[ServiceWorker] 处理桌面风险通知失败:', error);
+  });
 });
 
 // 标签页关闭清理

@@ -63,6 +63,63 @@ button {
   color: inherit;
 }
 
+.startup-transition {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 14px;
+  background: var(--page);
+  color: var(--text-secondary);
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 240ms ease, visibility 0s linear 240ms;
+}
+
+.startup-spinner {
+  width: 24px;
+  height: 24px;
+  border: 2px solid color-mix(in srgb, var(--text-tertiary) 28%, transparent);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: startup-spin 720ms linear infinite;
+}
+
+.startup-label {
+  font-size: 0.82rem;
+  font-weight: 520;
+  letter-spacing: 0.01em;
+}
+
+body.onboarding-ready .startup-transition {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.onboarding-layout,
+.resource-strip {
+  opacity: 1;
+  transform: translateY(0);
+  transition:
+    opacity 280ms ease,
+    transform 420ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+body.onboarding-loading .onboarding-layout,
+body.onboarding-loading .resource-strip {
+  opacity: 0;
+  transform: translateY(8px);
+}
+
+@keyframes startup-spin {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
 .onboarding-layout {
   width: min(1240px, calc(100% - 80px));
   margin: 0 auto;
@@ -541,8 +598,15 @@ button {
   }
 
   .setting-detail,
-  .resource-icon {
+  .resource-icon,
+  .onboarding-layout,
+  .resource-strip {
     transform: none !important;
+  }
+
+  .startup-spinner {
+    animation: none;
+    border-color: var(--accent);
   }
 }
 

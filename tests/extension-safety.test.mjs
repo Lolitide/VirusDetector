@@ -13,6 +13,9 @@ const warningCss = readFileSync(new URL('../warning/warning.css', import.meta.ur
 const warningScript = readFileSync(new URL('../warning/warning.js', import.meta.url), 'utf8');
 const reportScript = readFileSync(new URL('../warning/report.js', import.meta.url), 'utf8');
 const themeInitScript = readFileSync(new URL('../popup/theme-init.js', import.meta.url), 'utf8');
+const onboardingHtml = readFileSync(new URL('../onboarding/onboarding.html', import.meta.url), 'utf8');
+const onboardingCss = readFileSync(new URL('../onboarding/onboarding.css', import.meta.url), 'utf8');
+const onboardingScript = readFileSync(new URL('../onboarding/onboarding.js', import.meta.url), 'utf8');
 
 function sourceBetween(source, startMarker, endMarker) {
   const start = source.indexOf(startMarker);
@@ -201,6 +204,43 @@ test('high-risk responses replace the dangerous tab with the warning page', () =
   assert.match(warningPage, /safeUrl/);
 });
 
+test('risk notifications complete alongside the warning page and target the original tab', () => {
+  const notification = sourceBetween(
+    serviceWorker,
+    'async function showDesktopRiskNotification',
+    'function createAnalysisIdentity'
+  );
+  const warningFlow = sourceBetween(
+    serviceWorker,
+    'async function triggerWarningFlow',
+    'async function injectDownloadBlocker'
+  );
+  const notificationButton = sourceBetween(
+    serviceWorker,
+    'async function handleRiskNotificationButton',
+    '// 标签页关闭清理'
+  );
+
+  assert.match(notification, /typeof chrome\.notifications\.getPermissionLevel === ['"]function['"]/);
+  assert.match(notification, /await chrome\.notifications\.create/);
+  assert.match(notification, /risk:\$\{tabId\}:/);
+  assert.match(notification, /navigationGeneration:\s*tabState\.navigationGeneration/);
+  assert.match(notification, /analysisDocumentId:\s*tabState\.analysisDocumentId/);
+  assert.match(warningFlow, /settings\.desktopNotifications !== false/);
+  assert.match(warningFlow, /notificationTask = showDesktopRiskNotification/);
+  assert.match(warningFlow, /Promise\.all\([\s\S]*openWarningPage[\s\S]*notificationTask/);
+  assert.match(notificationButton, /takeRiskNotificationContext\(notificationId\)/);
+  assert.match(notificationButton, /chrome\.tabs\.get\(context\.tabId\)/);
+  assert.match(notificationButton, /tabStateMatchesAnalysisIdentity\(tabState,\s*context\)/);
+  assert.match(notificationButton, /tab\?\.pendingUrl/);
+  assert.match(notificationButton, /isCurrentAnalysisIdentity\(context\.tabId,\s*context\)/);
+  assert.match(notificationButton, /blockedContext\?\.navigationGeneration === context\.navigationGeneration/);
+  assert.match(notificationButton, /blockedContext\?\.analysisDocumentId === context\.analysisDocumentId/);
+  assert.match(notificationButton, /chrome\.tabs\.remove\(context\.tabId\)/);
+  assert.doesNotMatch(notificationButton, /chrome\.tabs\.query/);
+  assert.match(serviceWorker, /_riskNotificationConsumptions/);
+});
+
 test('the warning page exposes only safe primary actions and confirms trust', () => {
   assert.match(warningHtml, /id="btn-back"[^>]*>回退<\/button>/);
   assert.match(warningHtml, /id="btn-ask-ai"/);
@@ -327,6 +367,22 @@ test('the warning page inherits light, dark, and automatic extension themes', ()
   assert.match(warningScript, /chrome\.storage\.onChanged\.addListener/);
   assert.match(warningScript, /selectedTheme === ['"]auto['"]/);
   assert.match(warningScript, /prefers-color-scheme:\s*dark/);
+});
+
+test('the first-install setup waits for initialization and respects reduced motion', () => {
+  assert.match(onboardingHtml, /<body class="onboarding-loading">/);
+  assert.match(onboardingHtml, /id="startup-transition"[^>]+role="status"/);
+  assert.match(onboardingHtml, /data-onboarding-content inert aria-hidden="true"/);
+  assert.match(onboardingCss, /@keyframes startup-spin/);
+  assert.match(onboardingCss, /body\.onboarding-ready \.startup-transition/);
+  assert.match(onboardingCss, /@media \(prefers-reduced-motion: reduce\)/);
+  assert.match(onboardingScript, /startupMinDuration = reducedMotion\.matches \? 0 : 420/);
+  assert.match(onboardingScript, /await init\(\)/);
+  assert.match(onboardingScript, /await waitForStartupTransition\(\)/);
+  assert.match(onboardingScript, /removeAttribute\(['"]inert['"]\)/);
+  assert.match(onboardingScript, /removeAttribute\(['"]aria-hidden['"]\)/);
+  assert.match(onboardingScript, /setTimeout\(unlockOnboardingContent,\s*startupRevealDuration\)/);
+  assert.match(onboardingScript, /finishStartupTransition\(\)/);
 });
 
 test('AI handoff shares only the blocked site origin', () => {
