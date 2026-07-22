@@ -14,6 +14,7 @@
  *     isMalicious: boolean,    // 是否达到危险阈值
  *     correctUrl: string|null, // 正确官网 URL（若有）
  *     ruleResults: object,     // 五条规则的详细结果
+ *     writeToken: string|null, // 异步写入令牌，用于撤销过期导航产生的缓存
  *     timestamp: number        // 缓存写入时间（毫秒时间戳）
  *   }
  *

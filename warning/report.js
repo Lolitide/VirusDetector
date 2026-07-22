@@ -1,6 +1,17 @@
+/**
+ * 渲染被拦截站点的检查报告，并处理返回官网、误报上报和自动关闭。
+ * 页面只使用后台签发的 nonce 提交操作，不信任客户端传入的目标网址。
+ *
+ * @module warning-report
+ */
+
 (function () {
   'use strict';
 
+  /**
+   * @param {string} value 待校验网址
+   * @returns {string} 安全的 HTTP(S) 网址；无效输入返回空字符串
+   */
   function safeUrl(value) {
     try {
       const url = new URL(value);

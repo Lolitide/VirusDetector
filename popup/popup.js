@@ -1,6 +1,8 @@
 /**
  * 银狐木马检测 - Popup UI
- * SVG图标系统 + 优化排版 + 白名单极简模式
+ * 负责展示当前标签页检测结果、名单状态和快捷操作，并使用内联 SVG 图标渲染状态。
+ *
+ * @module popup
  */
 (function () {
   'use strict';

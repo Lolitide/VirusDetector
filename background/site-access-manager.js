@@ -1,3 +1,10 @@
+/**
+ * 统一管理站点白名单与黑名单，负责主机名规范化、冲突消解、持久化和串行写入。
+ * 名单按精确 hostname 匹配，避免共享托管域下的不同站点互相影响。
+ *
+ * @module site-access-manager
+ */
+
 import { SITE_BLACKLIST_MAX_ENTRIES, STORAGE_KEYS } from '../utils/constants.js';
 
 export class SiteAccessManager {
@@ -5,6 +12,11 @@ export class SiteAccessManager {
   static _blacklist = null;
   static _mutations = Promise.resolve();
 
+  /**
+   * 将 URL 或主机名转换为可用于名单匹配的 hostname。
+   * @param {string} value URL 或主机名
+   * @returns {string} 规范化主机名；无效输入返回空字符串
+   */
   static normalizeDomain(value) {
     if (typeof value !== 'string' || !value.trim()) return '';
     try {
@@ -18,6 +30,11 @@ export class SiteAccessManager {
     }
   }
 
+  /**
+   * 查询一个站点当前的统一名单状态。
+   * @param {string} value URL 或主机名
+   * @returns {Promise<{domain:string,isWhitelisted:boolean,isBlacklisted:boolean}>}
+   */
   static async getState(value) {
     const domain = this.normalizeDomain(value);
     if (!domain) return { domain: '', isWhitelisted: false, isBlacklisted: false };
@@ -29,11 +46,13 @@ export class SiteAccessManager {
     };
   }
 
+  /** @returns {Promise<string[]>} 当前白名单主机名 */
   static async getWhitelist() {
     await this._load();
     return [...this._whitelist];
   }
 
+  /** @returns {Promise<Object<string, Object>>} 当前站点黑名单 */
   static async getSiteBlacklist() {
     await this._load();
     return Object.fromEntries(
@@ -41,14 +60,27 @@ export class SiteAccessManager {
     );
   }
 
+  /**
+   * @param {string} value URL 或主机名
+   * @returns {Promise<boolean>} 是否在白名单中
+   */
   static async isWhitelisted(value) {
     return (await this.getState(value)).isWhitelisted;
   }
 
+  /**
+   * @param {string} value URL 或主机名
+   * @returns {Promise<boolean>} 是否在黑名单中
+   */
   static async isBlacklisted(value) {
     return (await this.getState(value)).isBlacklisted;
   }
 
+  /**
+   * 加入白名单，并删除同主机名的黑名单条目。
+   * @param {string} value URL 或主机名
+   * @returns {Promise<{domain:string,isWhitelisted:boolean,isBlacklisted:boolean}>}
+   */
   static addToWhitelist(value) {
     return this._mutate(async () => {
       const domain = this._requireDomain(value);
@@ -64,6 +96,10 @@ export class SiteAccessManager {
     });
   }
 
+  /**
+   * @param {string} value URL 或主机名
+   * @returns {Promise<{domain:string,isWhitelisted:boolean,isBlacklisted:boolean}>} 更新后的状态
+   */
   static removeFromWhitelist(value) {
     return this._mutate(async () => {
       const domain = this._requireDomain(value);
@@ -77,6 +113,11 @@ export class SiteAccessManager {
     });
   }
 
+  /**
+   * 用给定列表整体替换白名单。
+   * @param {string[]} values URL 或主机名列表
+   * @returns {Promise<string[]>} 规范化后的白名单
+   */
   static replaceWhitelist(values) {
     return this._mutate(async () => {
       await this._load();
@@ -93,6 +134,12 @@ export class SiteAccessManager {
     });
   }
 
+  /**
+   * 加入站点黑名单，并删除同主机名的白名单条目。
+   * @param {string} value URL 或主机名
+   * @param {{addedBy?:string,note?:string}} [info] 条目来源与备注
+   * @returns {Promise<{domain:string,isWhitelisted:boolean,isBlacklisted:boolean}>}
+   */
   static addToBlacklist(value, info = {}) {
     return this._mutate(async () => {
       const domain = this._requireDomain(value);
@@ -117,6 +164,10 @@ export class SiteAccessManager {
     });
   }
 
+  /**
+   * @param {string} value URL 或主机名
+   * @returns {Promise<{domain:string,removed:boolean}>} 删除结果
+   */
   static removeFromBlacklist(value) {
     return this._mutate(async () => {
       const domain = this._requireDomain(value);
@@ -129,6 +180,7 @@ export class SiteAccessManager {
     });
   }
 
+  /** @returns {Promise<void>} */
   static clearSiteBlacklist() {
     return this._mutate(async () => {
       await this._load();
@@ -136,6 +188,11 @@ export class SiteAccessManager {
     });
   }
 
+  /**
+   * 使受 storage.onChanged 影响的内存缓存失效。
+   * @param {Object<string, chrome.storage.StorageChange>} [changes] 存储变更
+   * @returns {void}
+   */
   static invalidate(changes = {}) {
     if (!Object.keys(changes).length || changes[STORAGE_KEYS.WHITELIST]) this._whitelist = null;
     if (!Object.keys(changes).length || changes[STORAGE_KEYS.SITE_BLACKLIST]) this._blacklist = null;

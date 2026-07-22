@@ -1,13 +1,29 @@
+/**
+ * 控制高风险网页拦截页的主题、返回安全页面、AI 咨询、信任确认和报告入口。
+ * 所有敏感操作均携带后台签发的 nonce，由 Service Worker 校验并执行。
+ *
+ * @module warning-page
+ */
+
 (function () {
   'use strict';
 
   const systemTheme = window.matchMedia('(prefers-color-scheme: dark)');
   let selectedTheme = 'dark';
 
+  /**
+   * @param {string} theme 主题设置
+   * @returns {'light'|'dark'|'auto'} 规范化主题
+   */
   function normalizeTheme(theme) {
     return theme === 'light' || theme === 'auto' ? theme : 'dark';
   }
 
+  /**
+   * 应用扩展主题并保存用户选择。
+   * @param {'light'|'dark'|'auto'} theme 主题设置
+   * @returns {void}
+   */
   function applyTheme(theme) {
     selectedTheme = normalizeTheme(theme);
     const resolvedTheme = selectedTheme === 'auto'
@@ -20,6 +36,7 @@
     } catch {}
   }
 
+  /** @returns {Promise<void>} */
   async function syncThemeFromSettings() {
     try {
       const stored = await chrome.storage.local.get('global_settings');
@@ -48,6 +65,10 @@
     applyTheme(settings.theme || 'dark');
   });
 
+  /**
+   * @param {string} url 待校验网址
+   * @returns {string} 安全的 HTTP(S) 网址；无效输入返回空字符串
+   */
   function sanitizeUrl(url) {
     if (!url || typeof url !== 'string') return '';
     try {
@@ -58,6 +79,11 @@
     }
   }
 
+  /**
+   * 仅返回站点 origin，避免向外部 AI 分享路径和查询参数。
+   * @param {string} url 原始网址
+   * @returns {string} 可分享的站点 origin
+   */
   function getShareableUrl(url) {
     try {
       const parsed = new URL(url);
@@ -88,10 +114,15 @@
   domainEl.textContent = domain;
   dialogDomainEl.textContent = domain;
 
+  /**
+   * @param {string} message 页面状态文字
+   * @returns {void}
+   */
   function setPageStatus(message) {
     pageStatusEl.textContent = message || '';
   }
 
+  /** @returns {Promise<void>} */
   async function refreshBlockedState() {
     if (!originalUrl || accessRefreshRunning) return;
     accessRefreshRunning = true;
@@ -115,6 +146,10 @@
 
   refreshBlockedState();
 
+  /**
+   * @param {string} url 目标网址
+   * @returns {Promise<void>}
+   */
   async function moveCurrentTab(url) {
     const currentTab = await chrome.tabs.getCurrent();
     if (currentTab && currentTab.id) {
@@ -124,6 +159,7 @@
     window.location.replace(url);
   }
 
+  /** @returns {Promise<void>} */
   async function returnToSafety() {
     setPageStatus('正在返回安全页面');
     try {
@@ -141,6 +177,7 @@
     }
   }
 
+  /** @returns {string} 发送给 AI 的风险询问文本 */
   function buildAiPrompt() {
     const shareableUrl = getShareableUrl(originalUrl);
     const lines = [
@@ -153,6 +190,7 @@
     return lines.join('\n');
   }
 
+  /** @returns {Promise<void>} */
   async function askAi() {
     const prompt = buildAiPrompt();
     const doubaoUrl = 'https://www.doubao.com/chat/?q=' + encodeURIComponent(prompt);
@@ -170,6 +208,7 @@
     }
   }
 
+  /** @returns {Promise<void>} */
   async function trustSite() {
     if (!originalUrl) {
       dialogStatusEl.textContent = '无法确认原始网址，请返回安全页面';
@@ -194,6 +233,7 @@
     }
   }
 
+  /** @returns {Promise<void>} */
   async function openReport() {
     try {
       const response = await chrome.runtime.sendMessage({

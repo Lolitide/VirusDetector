@@ -508,6 +508,10 @@ const _navigationStates = new Map();
 const _lastCommittedHttpUrls = new Map();
 const WARNING_COOLDOWN_MS = 5000;
 
+/**
+ * @param {Object} tabState 标签页状态
+ * @returns {{url:string,navigationGeneration:number,analysisDocumentId:string}} 文档身份
+ */
 function createAnalysisIdentity(tabState) {
   return {
     url: tabState.url || '',
@@ -516,16 +520,30 @@ function createAnalysisIdentity(tabState) {
   };
 }
 
+/**
+ * @param {Object} expected 预期文档身份
+ * @param {Object} current 当前文档身份
+ * @returns {boolean} 是否为同一次导航中的同一文档
+ */
 function matchesAnalysisIdentity(expected, current) {
   return expected.url === current.url &&
     expected.navigationGeneration === current.navigationGeneration &&
     expected.analysisDocumentId === current.analysisDocumentId;
 }
 
+/**
+ * @param {Object} tabState 标签页状态
+ * @param {Object} expected 预期文档身份
+ * @returns {boolean}
+ */
 function tabStateMatchesAnalysisIdentity(tabState, expected) {
   return matchesAnalysisIdentity(expected, createAnalysisIdentity(tabState));
 }
 
+/**
+ * @param {number} tabId 标签页 ID
+ * @returns {Promise<{url:string,navigationGeneration:number,analysisDocumentId:string}>}
+ */
 async function getCurrentAnalysisIdentity(tabId) {
   const navigation = _navigationStates.get(tabId);
   const tab = await chrome.tabs.get(tabId);
@@ -537,6 +555,13 @@ async function getCurrentAnalysisIdentity(tabId) {
   };
 }
 
+/**
+ * 校验异步结果是否仍属于当前文档。
+ * @param {number} tabId 标签页 ID
+ * @param {Object} expected 预期文档身份
+ * @param {{allowWarningPage?:boolean,allowPending?:boolean}} [options] 预检与警告页兼容选项
+ * @returns {Promise<boolean>}
+ */
 async function isCurrentAnalysisIdentity(tabId, expected, options = {}) {
   try {
     const tab = await chrome.tabs.get(tabId);
@@ -566,12 +591,27 @@ async function isCurrentAnalysisTarget(tabId, tabState) {
   return isCurrentAnalysisIdentity(tabId, createAnalysisIdentity(tabState));
 }
 
+/**
+ * 仅在文档身份仍有效时保存异步分析结果。
+ * @param {number} tabId 标签页 ID
+ * @param {Object} tabState 待保存状态
+ * @param {Object} identity 预期文档身份
+ * @returns {Promise<boolean>} 保存后文档是否仍有效
+ */
 async function saveAnalysisStateIfCurrent(tabId, tabState, identity) {
   if (!await isCurrentAnalysisIdentity(tabId, identity)) return false;
   await saveTabState(tabId, tabState);
   return isCurrentAnalysisIdentity(tabId, identity);
 }
 
+/**
+ * 写入当前文档的域名缓存；导航过期时按令牌撤销本次写入。
+ * @param {number} tabId 标签页 ID
+ * @param {Object} identity 预期文档身份
+ * @param {string} domain 域名
+ * @param {Object} data 缓存数据
+ * @returns {Promise<boolean>} 缓存是否保持有效
+ */
 async function cacheAnalysisIfCurrent(tabId, identity, domain, data) {
   if (!await isCurrentAnalysisIdentity(tabId, identity)) return false;
   const writeToken = createBlockedNonce();
@@ -701,6 +741,10 @@ async function whitelistSite(value, tabId = null) {
   return state;
 }
 
+/**
+ * @param {Object} tabState 标签页状态
+ * @returns {Object} 可用于名单状态恢复的文档级分析快照
+ */
 function createAnalysisSnapshot(tabState) {
   return {
     url: tabState.url,
@@ -880,6 +924,10 @@ async function releaseBlacklistFromTab(tabId, url, isWarningPage) {
 
 let _siteAccessSync = Promise.resolve();
 
+/**
+ * 串行核对所有标签页的统一名单状态，并立即应用白名单或黑名单变化。
+ * @returns {Promise<void>}
+ */
 function syncSiteAccessStateAcrossTabs() {
   const sync = async () => {
     const tabs = await chrome.tabs.query({});
@@ -1969,6 +2017,11 @@ chrome.webNavigation.onCommitted.addListener((details) => {
   if (!shouldSkipUrl(details.url)) _lastCommittedHttpUrls.set(details.tabId, details.url);
 });
 
+/**
+ * 处理 History API 与锚点导航，更新文档 URL 后重新分析当前页面。
+ * @param {chrome.webNavigation.WebNavigationFramedCallbackDetails} details 导航详情
+ * @returns {Promise<void>}
+ */
 async function handleSameDocumentNavigation(details) {
   if (details.frameId !== 0 || shouldSkipUrl(details.url)) return;
 
