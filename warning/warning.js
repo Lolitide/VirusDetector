@@ -1,15 +1,68 @@
-/**
- * 银狐木马检测拦截页控制器。
- * 负责安全回退、向豆包携带上下文提问，以及二次确认后的白名单放行。
- */
 (function () {
   'use strict';
+
+  const systemTheme = window.matchMedia('(prefers-color-scheme: dark)');
+  let selectedTheme = 'dark';
+
+  function normalizeTheme(theme) {
+    return theme === 'light' || theme === 'auto' ? theme : 'dark';
+  }
+
+  function applyTheme(theme) {
+    selectedTheme = normalizeTheme(theme);
+    const resolvedTheme = selectedTheme === 'auto'
+      ? (systemTheme.matches ? 'dark' : 'light')
+      : selectedTheme;
+
+    document.documentElement.dataset.theme = resolvedTheme;
+    try {
+      localStorage.setItem('vt_theme', selectedTheme);
+    } catch {}
+  }
+
+  async function syncThemeFromSettings() {
+    try {
+      const stored = await chrome.storage.local.get('global_settings');
+      const settings = stored && stored.global_settings ? stored.global_settings : {};
+      applyTheme(settings.theme || 'dark');
+    } catch (error) {
+      applyTheme(selectedTheme);
+    }
+  }
+
+  try {
+    selectedTheme = normalizeTheme(localStorage.getItem('vt_theme'));
+  } catch (error) {
+    selectedTheme = 'dark';
+  }
+
+  syncThemeFromSettings();
+
+  systemTheme.addEventListener('change', () => {
+    if (selectedTheme === 'auto') applyTheme('auto');
+  });
+
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName !== 'local' || !changes.global_settings) return;
+    const settings = changes.global_settings.newValue || {};
+    applyTheme(settings.theme || 'dark');
+  });
 
   function sanitizeUrl(url) {
     if (!url || typeof url !== 'string') return '';
     try {
       const parsed = new URL(url);
       return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.href : '';
+    } catch (error) {
+      return '';
+    }
+  }
+
+  function getShareableUrl(url) {
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return '';
+      return parsed.origin;
     } catch (error) {
       return '';
     }
@@ -26,19 +79,41 @@
 
   const domainEl = document.getElementById('info-domain');
   const dialogDomainEl = document.getElementById('dialog-domain');
-  const scoreEl = document.getElementById('risk-score');
   const pageStatusEl = document.getElementById('page-status');
   const dialogStatusEl = document.getElementById('dialog-status');
   const trustDialog = document.getElementById('trust-dialog');
   const confirmTrustButton = document.getElementById('btn-confirm-trust');
+  let accessRefreshRunning = false;
 
   domainEl.textContent = domain;
   dialogDomainEl.textContent = domain;
-  scoreEl.textContent = String(score);
 
   function setPageStatus(message) {
     pageStatusEl.textContent = message || '';
   }
+
+  async function refreshBlockedState() {
+    if (!originalUrl || accessRefreshRunning) return;
+    accessRefreshRunning = true;
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: 'CHECK_WHITELIST',
+        payload: { url: originalUrl }
+      });
+      if (response?.isWhitelisted) {
+        setPageStatus('白名单已更新，正在继续访问');
+        window.location.replace(originalUrl);
+        return;
+      }
+    } catch {}
+    accessRefreshRunning = false;
+  }
+
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName === 'local' && changes.whitelist) refreshBlockedState();
+  });
+
+  refreshBlockedState();
 
   async function moveCurrentTab(url) {
     const currentTab = await chrome.tabs.getCurrent();
@@ -65,9 +140,10 @@
   }
 
   function buildAiPrompt() {
+    const shareableUrl = getShareableUrl(originalUrl);
     const lines = [
       '银狐木马检测扩展拦截了一个网站，请帮我判断它是否安全。',
-      '网站：' + (originalUrl || domain),
+      '网站：' + (shareableUrl || domain),
       '威胁评分：' + score + ' 分'
     ];
     if (reasons) lines.push('命中信号：' + reasons);
@@ -78,13 +154,11 @@
   async function askAi() {
     const prompt = buildAiPrompt();
     const doubaoUrl = 'https://www.doubao.com/chat/?q=' + encodeURIComponent(prompt);
-    setPageStatus('正在打开豆包，问题已复制');
+    setPageStatus('正在打开豆包');
 
     try {
       await navigator.clipboard.writeText(prompt);
-    } catch (error) {
-      // URL 仍会携带问题，剪贴板仅作为兼容兜底。
-    }
+    } catch {}
 
     try {
       await chrome.tabs.create({ url: doubaoUrl, active: true });
@@ -118,6 +192,27 @@
     }
   }
 
+  async function openReport() {
+    const reportParams = new URLSearchParams({
+      domain,
+      score: String(score),
+      correctUrl
+    });
+    const reportUrl = chrome.runtime.getURL('warning/report.html?' + reportParams.toString());
+
+    try {
+      await chrome.windows.create({
+        url: reportUrl,
+        type: 'popup',
+        width: 480,
+        height: 560,
+        focused: true
+      });
+    } catch (error) {
+      await chrome.tabs.create({ url: reportUrl, active: true });
+    }
+  }
+
   document.getElementById('btn-back').addEventListener('click', returnToSafety);
   document.getElementById('btn-ask-ai').addEventListener('click', askAi);
   document.getElementById('btn-review-trust').addEventListener('click', () => {
@@ -126,6 +221,7 @@
   });
   document.getElementById('btn-confirm-trust').addEventListener('click', trustSite);
   document.getElementById('btn-cancel-trust').addEventListener('click', returnToSafety);
+  document.getElementById('btn-open-report').addEventListener('click', openReport);
 
   trustDialog.addEventListener('cancel', event => {
     event.preventDefault();

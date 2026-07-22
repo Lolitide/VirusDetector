@@ -1224,6 +1224,11 @@
     return false;
   });
 
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName !== 'local' || !changes.whitelist) return;
+    shouldSkipPageAnalysis().catch(() => {});
+  });
+
   // ==================== 初始化 ====================
 
   function runWhenIdle(fn) {

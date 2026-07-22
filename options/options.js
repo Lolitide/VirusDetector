@@ -901,8 +901,8 @@ class SettingsApp {
   /** 从 storage 读取白名单并填充 textarea */
   async _loadWhitelist() {
     try {
-      const r = await chrome.storage.local.get(STORAGE_KEYS.WHITELIST);
-      const whitelist = r[STORAGE_KEYS.WHITELIST] || [];
+      const response = await chrome.runtime.sendMessage({ type: MSG_TYPES.GET_SITE_ACCESS_LISTS });
+      const whitelist = response?.data?.whitelist || [];
       const editor = document.getElementById('whitelist-editor');
       if (editor) editor.value = whitelist.join('\n');
       this._updateWhitelistCount(whitelist.length);
@@ -923,16 +923,15 @@ class SettingsApp {
     const lines = editor.value.split(/[\n\r]+/).map(s => s.trim()).filter(Boolean);
     const domains = [...new Set(lines)]; // 去重
     try {
-      await chrome.storage.local.set({ [STORAGE_KEYS.WHITELIST]: domains });
-      // 通知 Service Worker 刷新内存缓存
-      try {
-        await chrome.runtime.sendMessage({
-          type: 'BULK_UPDATE_WHITELIST',
-          payload: { domains }
-        });
-      } catch (e) { /* SW 可能不在运行 */ }
-      this._updateWhitelistCount(domains.length);
-      this._showToast(`白名单已保存（${domains.length} 个域名）`, 'success');
+      const response = await chrome.runtime.sendMessage({
+        type: MSG_TYPES.BULK_UPDATE_WHITELIST,
+        payload: { domains }
+      });
+      if (!response?.success) throw new Error(response?.error || '后台未响应');
+      const savedDomains = response.data || domains;
+      editor.value = savedDomains.join('\n');
+      this._updateWhitelistCount(savedDomains.length);
+      this._showToast(`白名单已保存（${savedDomains.length} 个域名）`, 'success');
     } catch (e) {
       this._showToast('保存失败: ' + e.message, 'error');
     }

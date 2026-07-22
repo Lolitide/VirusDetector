@@ -24,7 +24,7 @@ import { ScoringEngine, setActiveSettings } from './scoring-engine.js';
 import { DomainDatabase } from './domain-database.js';
 import { CacheManager } from './cache-manager.js';
 import { DownloadBlacklist } from './download-blacklist.js';
-import { SiteBlacklist } from './site-blacklist.js';
+import { SiteAccessManager } from './site-access-manager.js';
 import { ResourceResolver } from './resource-resolver/index.js';
 import { registerNonChineseBrandDomains, IcpUtils } from './icp-utils.js';
 import { IcpApiClient } from './icp-api.js';
@@ -425,93 +425,6 @@ function setIconWhitelist(tabId) {
   chrome.action.setBadgeBackgroundColor({ tabId, color: '#2196F3' }).catch(() => {});
 }
 
-// ==================== 白名单管理 ====================
-// 白名单存储在 chrome.storage.local 中，键名为 STORAGE_KEYS.WHITELIST
-// 数据结构：string[] — 域名列表（不含协议和路径，如 "example.com"）
-// 白名单中的域名完全跳过 5 规则检测，工具栏图标显示蓝色 "✓" 徽章
-//
-// 性能优化：内存缓存 + storage.onChanged 失效机制，避免每次操作都读存储。
-
-/** @type {Set<string>|null} 内存缓存的白名单域名集合 */
-let _whitelistCache = null;
-
-/**
- * 从存储加载白名单（优先返回内存缓存）
- * @returns {Promise<string[]>}
- */
-async function loadWhitelist() {
-  if (_whitelistCache) {
-    return [..._whitelistCache];
-  }
-  try {
-    const r = await chrome.storage.local.get(STORAGE_KEYS.WHITELIST);
-    const list = r[STORAGE_KEYS.WHITELIST] || [];
-    _whitelistCache = new Set(list);
-    return list;
-  } catch (e) { return []; }
-}
-
-/** 使白名单内存缓存失效，下次 loadWhitelist 重新从存储读取 */
-function _invalidateWhitelistCache() {
-  _whitelistCache = null;
-}
-
-async function saveWhitelist(whitelist) {
-  try {
-    await chrome.storage.local.set({ [STORAGE_KEYS.WHITELIST]: whitelist });
-    // 同步更新内存缓存
-    _whitelistCache = new Set(whitelist);
-  } catch (e) { /* ignore */ }
-}
-
-/**
- * 检查URL对应域名是否在白名单中
- * 优化：优先 O(1) 内存缓存查找，避免每次异步读存储
- */
-async function isWhitelisted(url) {
-  const domain = UrlUtils.extractHostname(url);
-  if (_whitelistCache) {
-    return _whitelistCache.has(domain);
-  }
-  const whitelist = await loadWhitelist();
-  return whitelist.includes(domain);
-}
-
-/**
- * 将域名加入白名单
- */
-async function addToWhitelist(url) {
-  const domain = UrlUtils.extractHostname(url);
-  // 白名单与黑名单互斥：加入白名单前先移出黑名单中可能存在的同一域名
-  await SiteBlacklist.remove(domain);
-
-  // 先用内存缓存快速判断，避免无谓的存储读取
-  if (_whitelistCache && _whitelistCache.has(domain)) {
-    console.log('[ServiceWorker] 域名已在白名单:', domain);
-    return;
-  }
-  const whitelist = await loadWhitelist();
-  if (!whitelist.includes(domain)) {
-    whitelist.push(domain);
-    await saveWhitelist(whitelist);
-    console.log('[ServiceWorker] 已加入白名单:', domain);
-  }
-}
-
-/**
- * 将域名从白名单移除
- */
-async function removeFromWhitelist(url) {
-  const domain = UrlUtils.extractHostname(url);
-  const whitelist = await loadWhitelist();
-  const idx = whitelist.indexOf(domain);
-  if (idx !== -1) {
-    whitelist.splice(idx, 1);
-    await saveWhitelist(whitelist);
-    console.log('[ServiceWorker] 已移出白名单:', domain);
-  }
-}
-
 /**
  * 加载全局设置，与默认值合并确保所有键存在。
  * 当前包含：
@@ -614,7 +527,7 @@ async function injectDownloadBlocker(tabId, archiveUrls = [], mode = 'full') {
   try {
     const tab = await chrome.tabs.get(tabId);
     if (!tab.url || _authenticationTabs.has(tabId) ||
-        isSensitiveAuthenticationUrl(tab.url) || await isWhitelisted(tab.url)) {
+        isSensitiveAuthenticationUrl(tab.url) || await SiteAccessManager.isWhitelisted(tab.url)) {
       await removeDownloadBlocker(tabId);
       return;
     }
@@ -642,13 +555,113 @@ async function removeDownloadBlocker(tabId) {
   }
 }
 
-async function removeBlockersFromWhitelistedTabs() {
-  const tabs = await chrome.tabs.query({});
-  await Promise.all(tabs.map(async (tab) => {
-    if (!tab.id || !tab.url || !await isWhitelisted(tab.url)) return;
-    await removeDownloadBlocker(tab.id);
-    setIconWhitelist(tab.id);
-  }));
+async function whitelistSite(value, tabId = null) {
+  if (tabId) await preserveTabAnalysisBeforeWhitelist(tabId, value);
+  const state = await SiteAccessManager.addToWhitelist(value);
+  if (tabId) await markTabWhitelisted(tabId, value);
+  await syncWhitelistStateAcrossTabs();
+  return state;
+}
+
+function createAnalysisSnapshot(tabState) {
+  return {
+    domain: tabState.domain,
+    score: tabState.score,
+    riskLevel: tabState.riskLevel,
+    ruleResults: { ...(tabState.ruleResults || {}) },
+    correctUrl: tabState.correctUrl,
+    officialName: tabState.officialName
+  };
+}
+
+async function preserveTabAnalysisBeforeWhitelist(tabId, url) {
+  const domain = UrlUtils.extractHostname(url);
+  const tabState = await loadTabState(tabId);
+  if (tabState._preWhitelistState?.domain === domain) return;
+  if (tabState.domain !== domain || !tabState.isAnalyzed || tabState.isWhitelisted) return;
+
+  if (tabState.ruleResults?.siteBlacklist) {
+    const backup = tabState._preBlacklistState;
+    if (!backup || backup.domain !== domain) return;
+    tabState._preWhitelistState = createAnalysisSnapshot(backup);
+  } else {
+    tabState._preWhitelistState = createAnalysisSnapshot(tabState);
+  }
+  await saveTabState(tabId, tabState);
+}
+
+async function markTabWhitelisted(tabId, url) {
+  const domain = UrlUtils.extractHostname(url);
+  const tabState = await loadTabState(tabId);
+
+  if (!tabState._preWhitelistState && !tabState.isWhitelisted && tabState.isAnalyzed &&
+      tabState.domain === domain && !tabState.ruleResults?.siteBlacklist) {
+    tabState._preWhitelistState = createAnalysisSnapshot(tabState);
+  }
+
+  tabState.url = url;
+  tabState.domain = domain;
+  tabState.isWhitelisted = true;
+  tabState.score = 0;
+  tabState.riskLevel = RISK_LEVEL.SAFE;
+  tabState.isAnalyzed = true;
+  await saveTabState(tabId, tabState);
+  await removeDownloadBlocker(tabId);
+  setIconWhitelist(tabId);
+}
+
+async function recheckTabAfterWhitelistRemoval(tabId, url) {
+  const tabState = await loadTabState(tabId);
+  if (!tabState.isWhitelisted && !tabState._preWhitelistState) return;
+
+  const domain = UrlUtils.extractHostname(url);
+  const backup = tabState._preWhitelistState;
+  tabState.url = url;
+  tabState.domain = domain;
+  tabState.isWhitelisted = false;
+  delete tabState._preWhitelistState;
+
+  if (backup && backup.domain === domain) {
+    tabState.score = backup.score;
+    tabState.riskLevel = backup.riskLevel;
+    tabState.ruleResults = backup.ruleResults;
+    tabState.correctUrl = backup.correctUrl;
+    tabState.officialName = backup.officialName;
+    tabState.isAnalyzed = true;
+    await saveTabState(tabId, tabState);
+
+    const threshold = getEffectiveThreshold('scoreThreshold', SCORE_THRESHOLD);
+    if (tabState.score >= threshold) {
+      await triggerWarningFlow(tabId, tabState);
+    } else {
+      setIconGreen(tabId, tabState.score);
+    }
+    return;
+  }
+
+  tabState.isAnalyzed = false;
+  await saveTabState(tabId, tabState);
+  await analyzePage(tabId, url, domain, null, null);
+}
+
+let _whitelistSync = Promise.resolve();
+
+function syncWhitelistStateAcrossTabs() {
+  const sync = async () => {
+    const tabs = await chrome.tabs.query({});
+    await Promise.all(tabs.map(async tab => {
+      if (!tab.id || !tab.url || shouldSkipUrl(tab.url)) return;
+      if (await SiteAccessManager.isWhitelisted(tab.url)) {
+        await markTabWhitelisted(tab.id, tab.url);
+      } else {
+        await recheckTabAfterWhitelistRemoval(tab.id, tab.url);
+      }
+    }));
+  };
+
+  const operation = _whitelistSync.then(sync, sync);
+  _whitelistSync = operation.catch(() => {});
+  return operation;
 }
 
 function removeDownloadBlockerFunc() {
@@ -1065,7 +1078,7 @@ async function analyzePage(tabId, url, domain, pageMetrics, linkMetrics) {
   let tabState = await loadTabState(tabId);
 
   // 白名单检查：如果在白名单中，跳过所有检测
-  if (await isWhitelisted(url)) {
+  if (await SiteAccessManager.isWhitelisted(url)) {
     console.log('[ServiceWorker] 网站已在白名单中，跳过检测:', domain);
     tabState.isAnalyzed = true;
     tabState.isWhitelisted = true;
@@ -1081,7 +1094,7 @@ async function analyzePage(tabId, url, domain, pageMetrics, linkMetrics) {
   tabState.isWhitelisted = false;
 
   // 站点黑名单检查：如果在站点黑名单中，直接赋予高分触发警告流程
-  if (await SiteBlacklist.isBlacklisted(domain)) {
+  if (await SiteAccessManager.isBlacklisted(domain)) {
     console.log('[ServiceWorker] 站点在黑名单中，直接标记为高风险:', domain);
     // 保存当前分析数据备份（如果存在完整的非黑名单分析结果），以便移除黑名单后恢复
     if (tabState.isAnalyzed && tabState.ruleResults && Object.keys(tabState.ruleResults).length > 0
@@ -1303,7 +1316,7 @@ async function _applyWhoisUpdate(ctx, whoisResult) {
     return;
   }
 
-  if (await isWhitelisted(currentUrl)) {
+  if (await SiteAccessManager.isWhitelisted(currentUrl)) {
     await removeDownloadBlocker(tabId);
     setIconWhitelist(tabId);
     return;
@@ -1433,7 +1446,7 @@ async function _applyIcpUpdate(snapshot, icpApi) {
   // 白名单检查
   try {
     const tab = await chrome.tabs.get(tabId);
-    if (await isWhitelisted(tab.url || '')) return;
+    if (await SiteAccessManager.isWhitelisted(tab.url || '')) return;
   } catch (e) { return; }
 
   // 加载最新 tabState
@@ -1599,12 +1612,12 @@ async function runNavigationPreflight(details) {
 
   const settings = await getSettings();
   if (settings.showWarningWindow === false || _preflightNavigationTokens.get(tabId) !== token) return;
-  if (await isWhitelisted(url) || _preflightNavigationTokens.get(tabId) !== token) return;
+  if (await SiteAccessManager.isWhitelisted(url) || _preflightNavigationTokens.get(tabId) !== token) return;
 
   const domain = UrlUtils.extractHostname(url);
   let verdict = null;
 
-  if (await SiteBlacklist.isBlacklisted(domain)) {
+  if (await SiteAccessManager.isBlacklisted(domain)) {
     verdict = {
       score: SCORE_SITE_BLACKLIST,
       correctUrl: '',
@@ -1679,7 +1692,7 @@ chrome.webNavigation.onCompleted.addListener(async (details) => {
   await saveTabState(tabId, tabState);
 
   // 白名单检查：如果在白名单中，直接跳过分析
-  if (await isWhitelisted(url)) {
+  if (await SiteAccessManager.isWhitelisted(url)) {
     tabState.isAnalyzed = true;
     tabState.isWhitelisted = true;
     tabState.score = 0;
@@ -1970,10 +1983,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (tabs.length === 0) { sendResponse({ success: false, error: 'no tab' }); return; }
         const ts = await loadTabState(tabs[0].id);
         // 实时检查白名单状态
-        const whitelisted = await isWhitelisted(ts.url || '');
+        const whitelisted = await SiteAccessManager.isWhitelisted(ts.url || '');
         ts.isWhitelisted = whitelisted;
         // 实时检查站点黑名单状态
-        const siteBlacklisted = await SiteBlacklist.isBlacklisted(ts.domain || '');
+        const siteBlacklisted = await SiteAccessManager.isBlacklisted(ts.domain || '');
         sendResponse({
           success: true,
           data: {
@@ -2010,27 +2023,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (tabs.length === 0) { sendResponse({ success: false, error: 'no tab' }); return; }
         const url = message.payload?.url || '';
         if (url) {
-          // addToWhitelist 内部已处理黑名单互斥
-          await addToWhitelist(url);
-          await removeDownloadBlocker(tabs[0].id);
-          // 更新当前标签页状态
-          const ts = await loadTabState(tabs[0].id);
-          // 保存移除白名单后可恢复的分析数据备份（含域名用于防呆校验）
-          ts._preWhitelistState = {
-            domain: ts.domain,
-            score: ts.score,
-            riskLevel: ts.riskLevel,
-            ruleResults: ts.ruleResults,
-            correctUrl: ts.correctUrl,
-            officialName: ts.officialName
-          };
-          ts.isWhitelisted = true;
-          ts.score = 0;
-          ts.riskLevel = RISK_LEVEL.SAFE;
-          ts.isAnalyzed = true;
-          await saveTabState(tabs[0].id, ts);
-          setIconWhitelist(tabs[0].id);
-          // 不删除域名缓存，以便移除白名单后可恢复检测状态
+          await whitelistSite(url, tabs[0].id);
         }
         sendResponse({ success: true });
       });
@@ -2043,39 +2036,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (tabs.length === 0) { sendResponse({ success: false, error: 'no tab' }); return; }
         const url = message.payload?.url || '';
         if (url) {
-          await removeFromWhitelist(url);
-          const ts = await loadTabState(tabs[0].id);
-          ts.isWhitelisted = false;
-
-          // 尝试从备份恢复分析数据，避免不必要的重新检测
-          // 增加防呆校验：备份域名必须与当前页面域名一致（防止页面导航后恢复过期数据）
-          const currentDomain = ts.domain || UrlUtils.extractHostname(url);
-          const backup = ts._preWhitelistState;
-          if (backup && backup.ruleResults && Object.keys(backup.ruleResults).length > 0
-              && backup.domain === currentDomain) {
-            ts.score = backup.score;
-            ts.riskLevel = backup.riskLevel;
-            ts.ruleResults = backup.ruleResults;
-            ts.correctUrl = backup.correctUrl;
-            ts.officialName = backup.officialName;
-            ts.isAnalyzed = true;
-            delete ts._preWhitelistState;
-            await saveTabState(tabs[0].id, ts);
-            // 根据恢复的分数还原图标
-            const threshold = getEffectiveThreshold('scoreThreshold', SCORE_THRESHOLD);
-            if (ts.score >= threshold) {
-              setIconRed(tabs[0].id);
-            } else {
-              setIconGreen(tabs[0].id, ts.score);
-            }
-          } else {
-            // 无备份数据（页面可能已重新加载），需要触发重新分析
-            ts.isAnalyzed = false;
-            delete ts._preWhitelistState;
-            await saveTabState(tabs[0].id, ts);
-            analyzePage(tabs[0].id, ts.url || url, ts.domain || UrlUtils.extractHostname(url),
-              null, null).catch(console.error);
-          }
+          await SiteAccessManager.removeFromWhitelist(url);
+          await recheckTabAfterWhitelistRemoval(tabs[0].id, url);
+          await syncWhitelistStateAcrossTabs();
         }
         sendResponse({ success: true });
       });
@@ -2085,8 +2048,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case MSG_TYPES.CHECK_WHITELIST:
     case 'CHECK_WHITELIST': {
       const url = message.payload?.url || '';
-      isWhitelisted(url).then(result => {
-        sendResponse({ success: true, isWhitelisted: result });
+      SiteAccessManager.getState(url).then(state => {
+        sendResponse({ success: true, ...state });
       });
       return true;
     }
@@ -2100,21 +2063,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           return;
         }
 
-        await addToWhitelist(url);
         const tabId = sender.tab ? sender.tab.id : null;
-        if (tabId) {
-          const ts = await loadTabState(tabId);
-          ts.url = url;
-          ts.domain = UrlUtils.extractHostname(url);
-          ts.isWhitelisted = true;
-          ts.score = 0;
-          ts.riskLevel = RISK_LEVEL.SAFE;
-          ts.isAnalyzed = true;
-          await saveTabState(tabId, ts);
-          await removeDownloadBlocker(tabId);
-          setIconWhitelist(tabId);
-          _warningCooldown.delete(tabId);
-        }
+        await whitelistSite(url, tabId);
+        if (tabId) _warningCooldown.delete(tabId);
 
         sendResponse({ success: true });
       })().catch(error => {
@@ -2151,19 +2102,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           case 'trust_site':
             // 信任网站并放行：将页面域名加入白名单 + 重新发起下载
             if (pageDomain) {
-              await addToWhitelist('https://' + pageDomain);
-              // 更新标签页状态
-              if (tabId) {
-                const ts = await loadTabState(tabId);
-                ts.isWhitelisted = true;
-                ts.score = 0;
-                ts.riskLevel = RISK_LEVEL.SAFE;
-                ts.isAnalyzed = true;
-                await saveTabState(tabId, ts);
-                setIconWhitelist(tabId);
-                // 清除域名缓存
-                if (pageDomain) await CacheManager.remove(pageDomain);
-              }
+              await whitelistSite(pageDomain, tabId || null);
+              if (pageDomain) await CacheManager.remove(pageDomain);
             }
             if (downloadUrl) {
               try {
@@ -2227,8 +2167,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // 获取站点黑名单列表
     case MSG_TYPES.GET_SITE_BLACKLIST:
     case 'GET_SITE_BLACKLIST': {
-      SiteBlacklist.getAll().then(blacklist => {
+      SiteAccessManager.getSiteBlacklist().then(blacklist => {
         sendResponse({ success: true, data: blacklist });
+      });
+      return true;
+    }
+
+    case MSG_TYPES.GET_SITE_ACCESS_LISTS:
+    case 'GET_SITE_ACCESS_LISTS': {
+      Promise.all([
+        SiteAccessManager.getWhitelist(),
+        SiteAccessManager.getSiteBlacklist()
+      ]).then(([whitelist, siteBlacklist]) => {
+        sendResponse({ success: true, data: { whitelist, siteBlacklist } });
       });
       return true;
     }
@@ -2241,12 +2192,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           const domain = message.payload?.domain || '';
           const addedBy = message.payload?.addedBy || 'manual';
           if (!domain) { sendResponse({ success: false, error: '缺少 domain' }); return; }
-          // 白名单与黑名单互斥：加入黑名单时自动移出白名单
-          const whitelist = await loadWhitelist();
-          if (whitelist.includes(domain)) {
-            await saveWhitelist(whitelist.filter(d => d !== domain));
-          }
-          await SiteBlacklist.add(domain, { addedBy });
+          await SiteAccessManager.addToBlacklist(domain, { addedBy });
           
           // 保存当前标签页的分析数据备份，以便移除黑名单后恢复
           try {
@@ -2278,7 +2224,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case MSG_TYPES.REMOVE_SITE_BLACKLIST:
     case 'REMOVE_SITE_BLACKLIST': {
       const targetDomain = message.payload?.domain || '';
-      SiteBlacklist.remove(targetDomain).then(async (wasRemoved) => {
+      SiteAccessManager.removeFromBlacklist(targetDomain).then(async ({ removed: wasRemoved }) => {
         // 只有确实移除了条目时才触发恢复/重新分析流程
         // 避免在"加入白名单前先移出黑名单"的互斥操作中，对不在黑名单中的站点触发无意义的重新分析
         if (!wasRemoved) {
@@ -2290,7 +2236,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           if (tabs.length > 0) {
             const ts = await loadTabState(tabs[0].id);
             // 如果网站已在白名单中，不修改状态（白名单优先）
-            if (await isWhitelisted(ts.url || '')) {
+            if (await SiteAccessManager.isWhitelisted(ts.url || '')) {
               sendResponse({ success: true, removed: targetDomain });
               return;
             }
@@ -2335,7 +2281,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // 清除全部站点黑名单
     case MSG_TYPES.CLEAR_SITE_BLACKLIST:
     case 'CLEAR_SITE_BLACKLIST': {
-      SiteBlacklist.clearAll().then(() => {
+      SiteAccessManager.clearSiteBlacklist().then(() => {
         sendResponse({ success: true });
       });
       return true;
@@ -2346,7 +2292,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case 'SUBMIT_REPORT': {
       (async () => {
         try {
-          const { reportType, domain, note } = message.payload || {};
+          const { reportType, domain, note, url } = message.payload || {};
           if (!reportType || !domain) {
             sendResponse({ success: false, error: '缺少 reportType 或 domain' });
             return;
@@ -2381,14 +2327,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
           // 自动操作
           if (reportType === 'false_positive') {
-            // 用户认为该网站安全：加入白名单（addToWhitelist 内部已处理黑名单互斥），清除缓存
-            await addToWhitelist('https://' + domain);
+            const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+            await whitelistSite(url || domain, tabs[0]?.id || null);
             await CacheManager.remove(domain);
             console.log('[ServiceWorker] 误报已处理：加入白名单:', domain);
             sendResponse({ success: true, autoAction: 'whitelisted' });
           } else if (reportType === 'confirmed_phish') {
             // 确认钓鱼：移出白名单（互斥），同时将页面上的跨域下载域名加入下载黑名单
-            await removeFromWhitelist('https://' + domain);
+            await SiteAccessManager.removeFromWhitelist(domain);
+            await syncWhitelistStateAcrossTabs();
             const ts = await loadTabState((await chrome.tabs.query({ active: true, currentWindow: true }))[0]?.id || 0);
             if (ts && ts.linkMetrics && ts.linkMetrics.archiveDownloadLinks) {
               const crossDomainLinks = ts.linkMetrics.archiveDownloadLinks.filter(l => l.isCrossDomain);
@@ -2424,11 +2371,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case 'BULK_UPDATE_WHITELIST':
     case MSG_TYPES.BULK_UPDATE_WHITELIST: {
       const domains = (message.payload && message.payload.domains) ? message.payload.domains : [];
-      saveWhitelist(domains).then(async () => {
-        _whitelistCache = new Set(domains);
-        await removeBlockersFromWhitelistedTabs();
-        console.log('[ServiceWorker] 白名单已批量更新:', domains.length, '个域名');
-        sendResponse({ success: true, count: domains.length });
+      SiteAccessManager.replaceWhitelist(domains).then(async (whitelist) => {
+        await syncWhitelistStateAcrossTabs();
+        console.log('[ServiceWorker] 白名单已批量更新:', whitelist.length, '个域名');
+        sendResponse({ success: true, count: whitelist.length, data: whitelist });
       }).catch(e => {
         sendResponse({ success: false, error: e.message });
       });
@@ -2510,8 +2456,16 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 // 存储变更监听：白名单 / 黑名单 / 设置被其他页面修改时使内存缓存失效
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local') {
+    SiteAccessManager.invalidate(changes);
     if (changes[STORAGE_KEYS.WHITELIST]) {
-      _whitelistCache = null;
+      syncWhitelistStateAcrossTabs().catch(() => {});
+    }
+    if (changes[STORAGE_KEYS.SITE_BLACKLIST]) {
+      chrome.tabs.query({}).then(tabs => Promise.all(
+        tabs
+          .filter(tab => tab.id && tab.url && !shouldSkipUrl(tab.url))
+          .map(tab => runNavigationPreflight({ frameId: 0, tabId: tab.id, url: tab.url }))
+      )).catch(() => {});
     }
     if (changes[STORAGE_KEYS.DOWNLOAD_BLACKLIST]) {
       DownloadBlacklist.invalidateCache();

@@ -369,6 +369,38 @@
     } catch (e) { return null; }
   }
 
+  async function getManagedTarget() {
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tabs.length === 0) throw new Error('no_tab');
+
+    const tab = tabs[0];
+    const tabUrl = tab.url || '';
+    if (/^https?:/i.test(tabUrl)) {
+      return { tab, url: tabUrl, domain: new URL(tabUrl).hostname };
+    }
+
+    const state = await fetchState();
+    if (state?.url && /^https?:/i.test(state.url)) {
+      return {
+        tab,
+        url: state.url,
+        domain: state.domain || new URL(state.url).hostname
+      };
+    }
+
+    try {
+      const warningUrl = new URL(tabUrl);
+      const originalUrl = warningUrl.searchParams.get('originalUrl') || '';
+      const domain = warningUrl.searchParams.get('domain') || '';
+      if (/^https?:/i.test(originalUrl)) {
+        return { tab, url: originalUrl, domain: domain || new URL(originalUrl).hostname };
+      }
+      if (domain) return { tab, url: `https://${domain}`, domain };
+    } catch {}
+
+    throw new Error('no_managed_site');
+  }
+
   async function requestReanalysis() {
     try {
       const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -500,12 +532,10 @@
       reportFalseBtn.classList.add('active');
       reportFalseBtn.disabled = true;
       try {
-        const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-        if (tabs.length === 0) return;
-        const domain = new URL(tabs[0].url || '').hostname;
+        const { url, domain } = await getManagedTarget();
         await chrome.runtime.sendMessage({
           type: 'SUBMIT_REPORT',
-          payload: { reportType: 'false_positive', domain, note: '' }
+          payload: { reportType: 'false_positive', url, domain, note: '' }
         });
         _reportedFalse = true;
         await render();
@@ -550,12 +580,10 @@
       reportPhishBtn.classList.add('active');
       reportPhishBtn.disabled = true;
       try {
-        const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-        if (tabs.length === 0) return;
-        const domain = new URL(tabs[0].url || '').hostname;
+        const { url, domain } = await getManagedTarget();
         await chrome.runtime.sendMessage({
           type: 'SUBMIT_REPORT',
-          payload: { reportType: 'confirmed_phish', domain, note: '' }
+          payload: { reportType: 'confirmed_phish', url, domain, note: '' }
         });
         _reportedPhish = true;
         await render();
@@ -579,34 +607,23 @@
     els.whitelistBtn.classList.add('active');
     els.whitelistBtn.disabled = true;
     try {
-      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (tabs.length > 0) {
-        const url = tabs[0].url || '';
-        // 仅对有效的 HTTP URL 执行白名单操作
-        if (url && url.startsWith('http')) {
-          const checkResp = await chrome.runtime.sendMessage({
-            type: 'CHECK_WHITELIST',
-            payload: { url }
-          });
-          const isCurrentlyWhitelisted = checkResp?.isWhitelisted || false;
+      const { url } = await getManagedTarget();
+      const checkResp = await chrome.runtime.sendMessage({
+        type: 'CHECK_WHITELIST',
+        payload: { url }
+      });
+      const isCurrentlyWhitelisted = checkResp?.isWhitelisted || false;
 
-          if (isCurrentlyWhitelisted) {
-            await chrome.runtime.sendMessage({
-              type: 'REMOVE_FROM_WHITELIST',
-              payload: { url }
-            });
-          } else {
-            // 加入白名单时同时移出黑名单（互斥）
-            await chrome.runtime.sendMessage({
-              type: 'REMOVE_SITE_BLACKLIST',
-              payload: { domain: new URL(url).hostname }
-            });
-            await chrome.runtime.sendMessage({
-              type: 'ADD_TO_WHITELIST',
-              payload: { url }
-            });
-          }
-        }
+      if (isCurrentlyWhitelisted) {
+        await chrome.runtime.sendMessage({
+          type: 'REMOVE_FROM_WHITELIST',
+          payload: { url }
+        });
+      } else {
+        await chrome.runtime.sendMessage({
+          type: 'ADD_TO_WHITELIST',
+          payload: { url }
+        });
       }
       await render();
     } catch (e) {
@@ -621,34 +638,23 @@
     els.blacklistBtn.classList.add('active');
     els.blacklistBtn.disabled = true;
     try {
-      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (tabs.length > 0) {
-        const url = tabs[0].url || '';
-        // 仅对有效的 HTTP URL 执行黑名单操作
-        if (url && url.startsWith('http')) {
-          const domain = new URL(url).hostname;
+      const { url, domain } = await getManagedTarget();
+      const accessState = await chrome.runtime.sendMessage({
+        type: 'CHECK_WHITELIST',
+        payload: { url }
+      });
+      const isCurrentlyBlacklisted = accessState?.isBlacklisted === true;
 
-          const resp = await chrome.runtime.sendMessage({ type: 'GET_SITE_BLACKLIST' });
-          const blacklist = (resp && resp.data) ? resp.data : {};
-          const isCurrentlyBlacklisted = blacklist.hasOwnProperty(domain);
-
-          if (isCurrentlyBlacklisted) {
-            await chrome.runtime.sendMessage({
-              type: 'REMOVE_SITE_BLACKLIST',
-              payload: { domain }
-            });
-          } else {
-            // 加入黑名单时同时移出白名单（互斥）
-            await chrome.runtime.sendMessage({
-              type: 'REMOVE_FROM_WHITELIST',
-              payload: { url }
-            });
-            await chrome.runtime.sendMessage({
-              type: 'ADD_SITE_BLACKLIST',
-              payload: { domain, addedBy: 'popup' }
-            });
-          }
-        }
+      if (isCurrentlyBlacklisted) {
+        await chrome.runtime.sendMessage({
+          type: 'REMOVE_SITE_BLACKLIST',
+          payload: { domain }
+        });
+      } else {
+        await chrome.runtime.sendMessage({
+          type: 'ADD_SITE_BLACKLIST',
+          payload: { domain, addedBy: 'popup' }
+        });
       }
       await render();
     } catch (e) {

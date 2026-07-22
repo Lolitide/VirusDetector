@@ -7,8 +7,11 @@ const manifest = JSON.parse(readFileSync(new URL('../manifest.json', import.meta
 const navigationGuard = readFileSync(new URL('../content/navigation-guard.js', import.meta.url), 'utf8');
 const contentScript = readFileSync(new URL('../content/content-script.js', import.meta.url), 'utf8');
 const serviceWorker = readFileSync(new URL('../background/service-worker.js', import.meta.url), 'utf8');
+const siteAccessManager = readFileSync(new URL('../background/site-access-manager.js', import.meta.url), 'utf8');
 const warningHtml = readFileSync(new URL('../warning/warning.html', import.meta.url), 'utf8');
+const warningCss = readFileSync(new URL('../warning/warning.css', import.meta.url), 'utf8');
 const warningScript = readFileSync(new URL('../warning/warning.js', import.meta.url), 'utf8');
+const themeInitScript = readFileSync(new URL('../popup/theme-init.js', import.meta.url), 'utf8');
 
 function sourceBetween(source, startMarker, endMarker) {
   const start = source.indexOf(startMarker);
@@ -150,8 +153,14 @@ test('adding a site to the whitelist removes an existing page blocker', () => {
     'case MSG_TYPES.ADD_TO_WHITELIST:',
     'case MSG_TYPES.REMOVE_FROM_WHITELIST:'
   );
+  const tabSync = sourceBetween(
+    serviceWorker,
+    'async function markTabWhitelisted',
+    'async function recheckTabAfterWhitelistRemoval'
+  );
 
-  assert.match(handler, /removeDownloadBlocker\s*\(/);
+  assert.match(handler, /whitelistSite\(url, tabs\[0\]\.id\)/);
+  assert.match(tabSync, /removeDownloadBlocker\(tabId\)/);
 });
 
 test('known threats are checked before navigation without inventing page evidence', () => {
@@ -163,7 +172,7 @@ test('known threats are checked before navigation without inventing page evidenc
 
   assert.match(serviceWorker, /chrome\.webNavigation\.onBeforeNavigate\.addListener/);
   assert.match(preflight, /isWhitelisted\s*\(/);
-  assert.match(preflight, /SiteBlacklist\.isBlacklisted\s*\(/);
+  assert.match(preflight, /SiteAccessManager\.isBlacklisted\s*\(/);
   assert.match(preflight, /CacheManager\.get\s*\(/);
   assert.match(preflight, /cached\s*&&\s*cached\.isMalicious/);
   assert.match(preflight, /openWarningPage\(tabId,\s*tabState,\s*['"]preflight['"]\)/);
@@ -191,13 +200,49 @@ test('high-risk responses replace the dangerous tab with the warning page', () =
 test('the warning page exposes only safe primary actions and confirms trust', () => {
   assert.match(warningHtml, /id="btn-back"[^>]*>回退<\/button>/);
   assert.match(warningHtml, /id="btn-ask-ai"/);
-  assert.match(warningHtml, /doubao\.com/);
   assert.match(warningHtml, /你确认信任它吗？/);
   assert.match(warningHtml, /是的，我信任它/);
   assert.match(warningHtml, /不，我反悔了/);
+  assert.doesNotMatch(warningHtml, /id="risk-score"|威胁评分/);
   assert.doesNotMatch(warningHtml, /关闭此页面|安全建议|此检测有误/);
 
   assert.match(warningScript, /https:\/\/www\.doubao\.com\/chat\/\?q=/);
   assert.match(warningScript, /type:\s*['"]TRUST_BLOCKED_SITE['"]/);
   assert.match(warningScript, /window\.history\.go\(-historySteps\)/);
+});
+
+test('the warning page inherits light, dark, and automatic extension themes', () => {
+  assert.match(warningHtml, /<script src="\.\.\/popup\/theme-init\.js"><\/script>/);
+  assert.match(warningHtml, /<html[^>]+style="display: none;"/);
+  assert.match(warningCss, /\[data-theme="light"\]/);
+  assert.match(warningCss, /\[data-theme="dark"\]/);
+  assert.match(themeInitScript, /localStorage\.getItem\(['"]vt_theme['"]\)/);
+  assert.match(warningScript, /chrome\.storage\.local\.get\(['"]global_settings['"]\)/);
+  assert.match(warningScript, /chrome\.storage\.onChanged\.addListener/);
+  assert.match(warningScript, /selectedTheme === ['"]auto['"]/);
+  assert.match(warningScript, /prefers-color-scheme:\s*dark/);
+});
+
+test('AI handoff shares only the blocked site origin', () => {
+  const shareableUrl = sourceBetween(
+    warningScript,
+    'function getShareableUrl',
+    'const params = new URLSearchParams'
+  );
+
+  assert.match(shareableUrl, /return parsed\.origin/);
+  assert.doesNotMatch(shareableUrl, /parsed\.href/);
+  assert.match(warningScript, /https:\/\/www\.doubao\.com\/chat\/\?q=/);
+});
+
+test('all site access changes go through one manager', () => {
+  assert.match(serviceWorker, /import \{ SiteAccessManager \} from ['"]\.\/site-access-manager\.js['"]/);
+  assert.match(siteAccessManager, /class SiteAccessManager/);
+  assert.match(siteAccessManager, /addToWhitelist/);
+  assert.match(siteAccessManager, /addToBlacklist/);
+  assert.match(siteAccessManager, /replaceWhitelist/);
+  assert.match(siteAccessManager, /_mutations/);
+  assert.doesNotMatch(serviceWorker, /import \{ SiteBlacklist \}/);
+  assert.match(warningScript, /changes\.whitelist/);
+  assert.match(warningScript, /CHECK_WHITELIST/);
 });
