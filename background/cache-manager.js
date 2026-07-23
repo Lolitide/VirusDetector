@@ -39,11 +39,21 @@ async function _getCacheTtlMs() {
 
 export class CacheManager {
   /**
+   * 域名有效性检查：拒绝空字符串等无效域名，防止空键污染缓存
+   * @param {string} domain
+   * @returns {boolean}
+   */
+  static _isValidDomain(domain) {
+    return typeof domain === 'string' && domain.length > 0;
+  }
+
+  /**
    * 获取域名的缓存结果
    * @param {string} domain
    * @returns {Object|null} 缓存结果，过期或不存在返回null
    */
   static async get(domain) {
+    if (!this._isValidDomain(domain)) return null;
     try {
       const key = STORAGE_KEYS.DOMAIN_CACHE + domain;
       const result = await chrome.storage.local.get(key);
@@ -71,6 +81,7 @@ export class CacheManager {
    * @param {Object} data - { score, isMalicious, correctUrl, ruleResults }
    */
   static async set(domain, data) {
+    if (!this._isValidDomain(domain)) return;
     try {
       const key = STORAGE_KEYS.DOMAIN_CACHE + domain;
       await chrome.storage.local.set({
@@ -93,6 +104,7 @@ export class CacheManager {
    * @param {string} domain
    */
   static async remove(domain) {
+    if (!this._isValidDomain(domain)) return;
     try {
       const key = STORAGE_KEYS.DOMAIN_CACHE + domain;
       await chrome.storage.local.remove(key);

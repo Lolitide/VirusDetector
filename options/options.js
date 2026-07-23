@@ -8,7 +8,7 @@
  */
 
 import { SETTINGS_DEFAULTS, SECTIONS, SENSITIVITY_PRESETS, SCHEMA_VERSION, validateSetting } from '../utils/settings-schema.js';
-import { STORAGE_KEYS, MSG_TYPES, VERSION } from '../utils/constants.js';
+import { STORAGE_KEYS, MSG_TYPES, VERSION, UPDATE_CHANNEL } from '../utils/constants.js';
 
 class SettingsApp {
   constructor() {
@@ -42,6 +42,7 @@ class SettingsApp {
     this._renderSection(this._activeSection);
     this._bindEvents();
     this._applyModeToDom();
+    this._watchSystemTheme();
 
     console.log('[Settings] 设置页已初始化, schemaVersion:', SCHEMA_VERSION);
   }
@@ -55,7 +56,7 @@ class SettingsApp {
       // 合并：新键用默认值，已存储的键覆盖默认值
       this.settings = { ...SETTINGS_DEFAULTS, ...stored };
       // 同步 localStorage 主题镜像（确保后续页面加载无闪烁）
-      try { localStorage.setItem('vt_theme', this.settings.theme || 'dark'); } catch(e) {}
+      try { localStorage.setItem('vt_theme', this.settings.theme || 'dark'); } catch (e) { }
       // Schema 迁移检测
       if (stored._schemaVersion !== SCHEMA_VERSION) {
         console.log('[Settings] Schema 版本变更:', stored._schemaVersion, '→', SCHEMA_VERSION);
@@ -76,7 +77,7 @@ class SettingsApp {
     try {
       await chrome.storage.local.set({ [STORAGE_KEYS.GLOBAL_SETTINGS]: toStore });
       // 同步写入 localStorage 以便页面加载时无闪烁读取主题
-      try { localStorage.setItem('vt_theme', this.settings.theme || 'dark'); } catch(e) {}
+      try { localStorage.setItem('vt_theme', this.settings.theme || 'dark'); } catch (e) { }
       this._broadcastUpdate();
       console.log('[Settings] 已自动保存');
     } catch (e) {
@@ -198,23 +199,29 @@ class SettingsApp {
             </div>
           </div>`;
 
-      case 'theme':
+      case 'theme': {
+        const themeValue = value || 'dark';
+        const themes = [
+          { val: 'dark', label: '深色', icon: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>' },
+          { val: 'light', label: '浅色', icon: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>' },
+          { val: 'auto', label: '系统', icon: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>' }
+        ];
+        const segsHTML = themes.map(t =>
+          `<button type="button" class="theme-seg${t.val === themeValue ? ' active' : ''}" data-theme-val="${t.val}" title="${t.label}">${t.icon}</button>`
+        ).join('');
         return `
-          <div class="setting-row theme-setting-row" data-key="${setting.key}" data-mode="${setting.mode || 'basic'}">
+          <div class="setting-row" data-key="${setting.key}" data-mode="${setting.mode || 'basic'}">
             <div class="setting-info">
               <div class="setting-label">${setting.label}</div>
               <div class="setting-desc">${setting.desc}</div>
             </div>
             <div class="setting-control">
-              <label class="toggle theme-toggle">
-                <input type="checkbox" class="setting-input" data-key="${setting.key}" data-type="theme"
-                  ${value === 'light' ? 'checked' : ''}>
-                <span class="toggle-slider"></span>
-                <span class="theme-icon theme-icon-sun">☀️</span>
-                <span class="theme-icon theme-icon-moon">🌙</span>
-              </label>
+              <div class="theme-segmented" data-key="${setting.key}">
+                ${segsHTML}
+              </div>
             </div>
           </div>`;
+      }
 
       case 'preset':
         const presetValue = value || 'medium';
@@ -270,6 +277,21 @@ class SettingsApp {
             </div>
           </div>`;
 
+      case 'text':
+        return `
+          <div class="setting-row" data-key="${setting.key}" data-mode="${setting.mode || 'basic'}">
+            <div class="setting-info">
+              <div class="setting-label">${setting.label}</div>
+              <div class="setting-desc">${setting.desc}</div>
+            </div>
+            <div class="setting-control">
+              <input type="text" class="setting-input text-input" autocomplete="off" spellcheck="false"
+                data-key="${setting.key}" data-type="text"
+                value="${this._escapeHtml(value)}" placeholder="${setting.placeholder || ''}"
+                ${this._isInputDisabled(setting) ? 'disabled' : ''}>
+            </div>
+          </div>`;
+
       case 'action':
         const actionClass = setting.key === '_clearAllData' ? ' danger' : '';
         return `
@@ -302,11 +324,11 @@ class SettingsApp {
 
       if (type === 'boolean') {
         input.checked = !!value;
-      } else if (type === 'theme') {
-        input.checked = value === 'light';
       } else if (type === 'number') {
         input.value = value;
       } else if (type === 'select') {
+        input.value = value;
+      } else if (type === 'text') {
         input.value = value;
       }
     }
@@ -350,8 +372,21 @@ class SettingsApp {
 
     // click 事件委托
     app.addEventListener('click', (e) => {
-      const target = e.target.closest('.nav-item, [data-section], [data-preset], #import-btn, #export-btn, #reset-btn, .mode-segment, [data-action], #modal-cancel-btn, #modal-confirm-btn, #check-update-btn, #download-update-btn');
+      const target = e.target.closest('.nav-item, [data-section], [data-preset], #import-btn, #export-btn, #reset-btn, .mode-segment, [data-action], #modal-cancel-btn, #modal-confirm-btn, #check-update-btn, #download-update-btn, .theme-seg');
       if (!target) return;
+
+      if (target.matches('.theme-seg')) {
+        const themeVal = target.dataset.themeVal;
+        if (themeVal && themeVal !== this.settings.theme) {
+          target.parentElement.querySelectorAll('.theme-seg').forEach(s =>
+            s.classList.toggle('active', s.dataset.themeVal === themeVal)
+          );
+          this.settings.theme = themeVal;
+          this._applyTheme();
+          this._saveSettings();
+        }
+        return;
+      }
 
       if (target.matches('.nav-item') || target.dataset.section) {
         const sectionId = target.dataset.section || target.closest('.nav-item')?.dataset?.section;
@@ -525,8 +560,12 @@ class SettingsApp {
       case 'select':
         value = input.value;
         break;
+      case 'text':
+        value = input.value;
+        break;
       case 'theme':
-        value = input.checked ? 'light' : 'dark';
+        // 主题切换由 .theme-seg 点击事件直接处理，此分支不会被触发
+        value = input.value || 'dark';
         break;
       case 'preset':
         value = input.value;
@@ -584,13 +623,13 @@ class SettingsApp {
   _setMode(mode) {
     if (this._mode === mode) return;
     this._mode = mode;
-    try { localStorage.setItem('vt_mode', mode); } catch(e) {}
+    try { localStorage.setItem('vt_mode', mode); } catch (e) { }
     // 切回基础模式时，若当前在高级专属分区则跳转到常规
     if (mode === 'basic') {
       const advancedOnly = ['thresholds', 'download', 'blacklist'];
       if (advancedOnly.includes(this._activeSection)) {
         this._activeSection = 'general';
-        try { localStorage.setItem('vt_activeSection', 'general'); } catch(e) {}
+        try { localStorage.setItem('vt_activeSection', 'general'); } catch (e) { }
       }
     }
     this._applyModeToDom();
@@ -635,7 +674,7 @@ class SettingsApp {
   _switchSection(sectionId) {
     this._closeDrawer();
     this._activeSection = sectionId;
-    try { localStorage.setItem('vt_activeSection', sectionId); } catch(e) {}
+    try { localStorage.setItem('vt_activeSection', sectionId); } catch (e) { }
     this._renderSection(sectionId);
     // 高亮侧栏
     document.querySelectorAll('.nav-item').forEach(el => {
@@ -712,7 +751,7 @@ class SettingsApp {
     try {
       const all = await chrome.storage.local.get(null);
       const keysToRemove = Object.keys(all).filter(k =>
-        k.startsWith('domain_cache_')
+        k.startsWith('domain_cache_') || k.startsWith('icp_api_v1_')
       );
       if (keysToRemove.length > 0) {
         await chrome.storage.local.remove(keysToRemove);
@@ -749,7 +788,20 @@ class SettingsApp {
 
   _applyTheme() {
     const theme = this.settings.theme || SETTINGS_DEFAULTS.theme;
-    document.documentElement.dataset.theme = theme;
+    const resolved = theme === 'auto'
+      ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+      : theme;
+    document.documentElement.dataset.theme = resolved;
+  }
+
+  /** 系统配色变化时，若主题为 auto 则实时切换 */
+  _watchSystemTheme() {
+    const mql = window.matchMedia('(prefers-color-scheme: dark)');
+    mql.addEventListener('change', () => {
+      if (this.settings.theme === 'auto') {
+        this._applyTheme();
+      }
+    });
   }
 
   // ==================== 确认弹窗 ====================
@@ -922,11 +974,133 @@ class SettingsApp {
     this._showToast('白名单已导出', 'success');
   }
 
-  // ==================== 下载黑名单管理 ====================
+  // ==================== 站点黑名单管理 ====================
 
   /**
-   * 渲染下载黑名单 Section：表格列表 + 展开详情 + 删除 + 清除全部
+   * 渲染站点黑名单 Section：textarea 编辑器，手动增删域名
    */
+  async _renderSiteBlacklistSection(container, section) {
+    container.innerHTML = `
+      <div class="section active">
+        <div class="section-header">
+          <div class="section-title">${section.label}</div>
+          <div class="section-desc">${section.description}</div>
+        </div>
+        <div class="settings-card">
+          <div class="whitelist-hint">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="vertical-align:-2px;margin-right:4px;"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+            提示：站点黑名单中的域名将被直接标记为高风险并触发警告。也可以通过弹窗底部的按钮快速添加当前网站。
+          </div>
+          <div class="list-editor-wrapper">
+            <textarea id="site-bl-editor" class="list-editor" placeholder="每行输入一个域名，例如：&#10;malicious-site.com&#10;phishing-page.org" spellcheck="false"></textarea>
+            <div class="list-editor-count" id="site-bl-count"></div>
+          </div>
+          <div class="list-actions">
+            <button id="site-bl-import-btn" class="btn" title="从 .txt 文件导入域名（合并追加）">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+              导入 .txt
+            </button>
+            <button id="site-bl-export-btn" class="btn" title="导出域名列表到 .txt 文件">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              导出 .txt
+            </button>
+            <input type="file" id="site-bl-import-file" accept=".txt,.text" class="file-input-hidden">
+            <button id="site-bl-save-btn" class="btn btn-primary">保存更改</button>
+          </div>
+        </div>
+      </div>`;
+
+    await this._loadSiteBlacklist();
+
+    document.getElementById('site-bl-import-btn')?.addEventListener('click', () => {
+      document.getElementById('site-bl-import-file')?.click();
+    });
+    document.getElementById('site-bl-import-file')?.addEventListener('change', (e) => {
+      if (e.target.files[0]) { this._importSiteBlacklist(e.target.files[0]); e.target.value = ''; }
+    });
+    document.getElementById('site-bl-export-btn')?.addEventListener('click', () => this._exportSiteBlacklist());
+    document.getElementById('site-bl-save-btn')?.addEventListener('click', () => this._saveSiteBlacklist());
+  }
+
+  async _loadSiteBlacklist() {
+    try {
+      const resp = await chrome.runtime.sendMessage({ type: MSG_TYPES.GET_SITE_BLACKLIST });
+      const blacklist = (resp && resp.data) ? resp.data : {};
+      const domains = Object.keys(blacklist).sort();
+      const editor = document.getElementById('site-bl-editor');
+      if (editor) editor.value = domains.join('\n');
+      this._updateSiteBlCount(domains.length);
+    } catch (e) {
+      console.error('[Settings] 加载站点黑名单失败:', e);
+    }
+  }
+
+  _updateSiteBlCount(count) {
+    const el = document.getElementById('site-bl-count');
+    if (el) el.innerHTML = `共 <strong>${count}</strong> 个域名`;
+  }
+
+  async _saveSiteBlacklist() {
+    const editor = document.getElementById('site-bl-editor');
+    if (!editor) return;
+    const lines = editor.value.split(/[\n\r]+/).map(l => l.trim()).filter(Boolean);
+    const resp = await chrome.runtime.sendMessage({ type: MSG_TYPES.GET_SITE_BLACKLIST });
+    const current = (resp && resp.data) ? resp.data : {};
+    const currentDomains = new Set(Object.keys(current));
+    const newDomains = new Set(lines);
+
+    const toAdd = lines.filter(d => !currentDomains.has(d));
+    const toRemove = [...currentDomains].filter(d => !newDomains.has(d));
+
+    for (const domain of toAdd) {
+      await chrome.runtime.sendMessage({ type: MSG_TYPES.ADD_SITE_BLACKLIST, payload: { domain, addedBy: 'manual' } });
+    }
+    for (const domain of toRemove) {
+      await chrome.runtime.sendMessage({ type: MSG_TYPES.REMOVE_SITE_BLACKLIST, payload: { domain } });
+    }
+
+    if (toAdd.length > 0 || toRemove.length > 0) {
+      this._showToast(`已保存：新增 ${toAdd.length} 个，移除 ${toRemove.length} 个`, 'success');
+    } else {
+      this._showToast('未检测到更改', 'info');
+    }
+    await this._loadSiteBlacklist();
+  }
+
+  async _importSiteBlacklist(file) {
+    try {
+      const text = await file.text();
+      const imported = text.split(/[\n\r]+/).map(l => l.trim()).filter(Boolean);
+      const resp = await chrome.runtime.sendMessage({ type: MSG_TYPES.GET_SITE_BLACKLIST });
+      const current = (resp && resp.data) ? resp.data : {};
+      const currentSet = new Set(Object.keys(current));
+      let added = 0;
+      for (const domain of imported) {
+        if (!currentSet.has(domain)) {
+          await chrome.runtime.sendMessage({ type: MSG_TYPES.ADD_SITE_BLACKLIST, payload: { domain, addedBy: 'manual' } });
+          added++;
+        }
+      }
+      this._showToast(`已导入 ${added} 个新域名`, 'success');
+      await this._loadSiteBlacklist();
+    } catch (e) {
+      this._showToast('导入失败: ' + e.message, 'error');
+    }
+  }
+
+  _exportSiteBlacklist() {
+    const editor = document.getElementById('site-bl-editor');
+    if (!editor) return;
+    const blob = new Blob([editor.value || ''], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'virus-detector-site-blacklist.txt';
+    a.click(); URL.revokeObjectURL(url);
+    this._showToast('站点黑名单已导出', 'success');
+  }
+
+  // ==================== 下载黑名单管理 ====================
+
   async _renderBlacklistSection(container, section) {
     container.innerHTML = `
       <div class="section active">
@@ -943,14 +1117,13 @@ class SettingsApp {
           </div>
           <div class="list-actions" id="blacklist-actions" style="display:none;">
             <span class="list-editor-count" id="blacklist-count"></span>
-            <button id="bl-clear-all-btn" class="list-clear-all">清除全部黑名单</button>
+            <button id="bl-clear-all-btn" class="list-clear-all">清除全部下载黑名单</button>
           </div>
         </div>
       </div>`;
 
     await this._loadBlacklist();
 
-    // 绑定事件委托
     const card = container.querySelector('.settings-card');
     card?.addEventListener('click', (e) => {
       const delBtn = e.target.closest('.delete-btn');
@@ -968,11 +1141,10 @@ class SettingsApp {
     });
 
     document.getElementById('bl-clear-all-btn')?.addEventListener('click', () => {
-      this._showConfirm('确定要清除全部下载黑名单吗？<br>这将删除所有已记录的黑名单域名。<br>此操作不可撤销！', () => this._clearBlacklist());
+      this._showConfirm('确定要清除全部下载黑名单吗？<br>这将删除所有已记录的下载域名黑名单。<br>此操作不可撤销！', () => this._clearBlacklist());
     });
   }
 
-  /** 从 Service Worker 获取黑名单并渲染表格 */
   async _loadBlacklist() {
     const content = document.getElementById('blacklist-content');
     const actions = document.getElementById('blacklist-actions');
@@ -980,8 +1152,7 @@ class SettingsApp {
 
     try {
       const resp = await chrome.runtime.sendMessage({
-        type: MSG_TYPES.GET_DOWNLOAD_BLACKLIST,
-        payload: {}
+        type: MSG_TYPES.GET_DOWNLOAD_BLACKLIST, payload: {}
       });
       const blacklist = (resp && resp.data) ? resp.data : {};
 
@@ -989,7 +1160,7 @@ class SettingsApp {
         content.innerHTML = `
           <div class="list-empty">
             <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 11l2 2 4-4"/></svg>
-            <p>黑名单为空</p>
+            <p>下载黑名单为空</p>
             <p style="font-size:12px;color:var(--text3);margin-top:4px;">当您在下载确认弹窗中选择"拉黑下载域名"时，域名将被自动添加到此列表</p>
           </div>`;
         actions.style.display = 'none';
@@ -997,20 +1168,11 @@ class SettingsApp {
       }
 
       const entries = Object.entries(blacklist);
-      // 按 lastHit 降序排列
       entries.sort((a, b) => (b[1].lastHit || 0) - (a[1].lastHit || 0));
 
       let tableHTML = `
         <table class="blacklist-table">
-          <thead>
-            <tr>
-              <th>域名</th>
-              <th>命中次数</th>
-              <th>最近命中</th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody>`;
+          <thead><tr><th>域名</th><th>命中次数</th><th>最近命中</th><th>操作</th></tr></thead><tbody>`;
 
       for (const [domain, entry] of entries) {
         const hitCount = entry.hitCount || 0;
@@ -1032,15 +1194,11 @@ class SettingsApp {
                   <div class="detail-label">来源页面</div>
                   <ul class="detail-sources">
                     ${(entry.sourcePages || []).slice(0, 5).map(sp =>
-                      `<li><a href="${this._escapeHtml(sp.pageUrl || '#')}" target="_blank" rel="noopener">${this._escapeHtml(sp.pageDomain || sp.pageUrl || '未知')}</a></li>`
-                    ).join('')}
+          `<li><a href="${this._escapeHtml(sp.pageUrl || '#')}" target="_blank" rel="noopener">${this._escapeHtml(sp.pageDomain || sp.pageUrl || '未知')}</a></li>`
+        ).join('')}
                     ${(entry.sourcePages || []).length > 5 ? `<li style="color:var(--text3)">...还有 ${entry.sourcePages.length - 5} 个来源</li>` : ''}
                   </ul>
-                  ${entry.fileTypes && entry.fileTypes.length > 0 ? `
-                  <div class="detail-label" style="margin-top:8px;">文件类型</div>
-                  <div class="detail-filetypes">
-                    ${entry.fileTypes.map(ft => `<span class="detail-filetype-tag">${this._escapeHtml(ft)}</span>`).join('')}
-                  </div>` : ''}
+                  ${entry.fileTypes && entry.fileTypes.length > 0 ? `<div class="detail-label" style="margin-top:8px;">文件类型</div><div class="detail-filetypes">${entry.fileTypes.map(ft => `<span class="detail-filetype-tag">${this._escapeHtml(ft)}</span>`).join('')}</div>` : ''}
                 </div>
               </td>
             </tr>`;
@@ -1053,15 +1211,11 @@ class SettingsApp {
       actions.style.display = 'flex';
     } catch (e) {
       content.innerHTML = `
-        <div class="list-empty">
-          <p>加载黑名单失败</p>
-          <p style="font-size:12px;color:var(--text3);margin-top:4px;">${this._escapeHtml(e.message)}</p>
-        </div>`;
+        <div class="list-empty"><p>加载下载黑名单失败</p><p style="font-size:12px;color:var(--text3);margin-top:4px;">${this._escapeHtml(e.message)}</p></div>`;
       actions.style.display = 'none';
     }
   }
 
-  /** 展开/收起黑名单行详情 */
   _toggleBlacklistExpand(domain) {
     const escapedId = 'bl-expand-' + this._escapeHtmlAttr(domain);
     const row = document.getElementById(escapedId);
@@ -1070,40 +1224,27 @@ class SettingsApp {
     }
   }
 
-  /** 删除单个黑名单条目 */
   async _removeBlacklistEntry(domain) {
-    this._showConfirm(`确定要从黑名单中移除 <strong>${domain}</strong> 吗？`, async () => {
+    this._showConfirm(`确定要从下载黑名单中移除 <strong>${domain}</strong> 吗？`, async () => {
       try {
-        await chrome.runtime.sendMessage({
-          type: MSG_TYPES.REMOVE_DOWNLOAD_BLACKLIST,
-          payload: { domain }
-        });
+        await chrome.runtime.sendMessage({ type: MSG_TYPES.REMOVE_DOWNLOAD_BLACKLIST, payload: { domain } });
         this._showToast(`已移除 ${domain}`, 'success');
-        await this._loadBlacklist(); // 刷新表格
+        await this._loadBlacklist();
       } catch (e) {
         this._showToast('删除失败: ' + e.message, 'error');
       }
     });
   }
 
-  /** 清除全部黑名单 */
   async _clearBlacklist() {
     try {
-      // 获取所有条目并逐条删除
-      const resp = await chrome.runtime.sendMessage({
-        type: MSG_TYPES.GET_DOWNLOAD_BLACKLIST,
-        payload: {}
-      });
+      const resp = await chrome.runtime.sendMessage({ type: MSG_TYPES.GET_DOWNLOAD_BLACKLIST, payload: {} });
       const blacklist = (resp && resp.data) ? resp.data : {};
       const domains = Object.keys(blacklist);
-
       for (const domain of domains) {
-        await chrome.runtime.sendMessage({
-          type: MSG_TYPES.REMOVE_DOWNLOAD_BLACKLIST,
-          payload: { domain }
-        });
+        await chrome.runtime.sendMessage({ type: MSG_TYPES.REMOVE_DOWNLOAD_BLACKLIST, payload: { domain } });
       }
-      this._showToast(`已清除 ${domains.length} 条黑名单记录`, 'success');
+      this._showToast(`已清除 ${domains.length} 条下载黑名单记录`, 'success');
       await this._loadBlacklist();
     } catch (e) {
       this._showToast('清除失败: ' + e.message, 'error');
@@ -1143,10 +1284,35 @@ class SettingsApp {
 
   // ==================== 更新检测 ====================
 
+  /**
+   * 判定更新渠道（与 Service Worker 逻辑一致）：
+   * UPDATE_CHANNEL 常量优先；'auto' 时商店安装会被商店注入 manifest.update_url。
+   */
+  _getUpdateChannel() {
+    if (UPDATE_CHANNEL === 'store' || UPDATE_CHANNEL === 'manual') return UPDATE_CHANNEL;
+    return chrome.runtime.getManifest().update_url ? 'store' : 'manual';
+  }
+
   async _loadUpdateInfo() {
     const statusEl = document.getElementById('update-status');
     const downloadBtn = document.getElementById('download-update-btn');
+    const checkBtn = document.getElementById('check-update-btn');
     if (!statusEl) return;
+
+    // 商店渠道：由浏览器扩展商店自动更新，无需远程检查
+    if (this._getUpdateChannel() === 'store') {
+      statusEl.innerHTML = `
+        <div class="update-status up-to-date">
+          <div style="color:var(--green);font-weight:600;">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" style="vertical-align:-3px;margin-right:4px;"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+            商店版本
+          </div>
+          <div style="font-size:12px;color:var(--text2);margin-top:4px;">由浏览器扩展商店自动更新，无需手动检查</div>
+        </div>`;
+      if (checkBtn) checkBtn.style.display = 'none';
+      if (downloadBtn) downloadBtn.style.display = 'none';
+      return;
+    }
 
     try {
       const r = await chrome.storage.local.get(STORAGE_KEYS.UPDATE_INFO);
@@ -1156,7 +1322,14 @@ class SettingsApp {
         return;
       }
 
-      if (info.error) {
+      const timeAgo = this._formatRelativeTime(info.lastCheck);
+      // 本次检查失败但保留了上次成功结果时，展示上次结果并附加失败提示
+      const failedNote = info.error
+        ? `<div style="font-size:12px;color:var(--red);margin-top:6px;">⚠️ 本次检查失败（以下为上次成功结果）：${this._escapeHtml(info.error)}</div>`
+        : '';
+
+      if (info.error && !info.latestVersion) {
+        // 从未成功过，仅展示错误
         statusEl.innerHTML = `
           <div class="update-status error">
             <span style="color:var(--red);">⚠️ 检查失败</span>
@@ -1165,7 +1338,6 @@ class SettingsApp {
         return;
       }
 
-      const timeAgo = this._formatRelativeTime(info.lastCheck);
       if (info.hasUpdate) {
         statusEl.innerHTML = `
           <div class="update-status has-update">
@@ -1177,11 +1349,10 @@ class SettingsApp {
             <div class="about-row"><span class="about-label">最新版本</span><span class="about-value" style="color:var(--green);font-weight:700;">v${info.latestVersion}</span></div>
             ${info.publishedAt ? `<div class="about-row"><span class="about-label">发布日期</span><span class="about-value">${new Date(info.publishedAt).toLocaleDateString('zh-CN')}</span></div>` : ''}
             <div class="about-row"><span class="about-label">上次检查</span><span class="about-value">${timeAgo}</span></div>
+            ${failedNote}
           </div>`;
-        if (downloadBtn && info.releaseUrl) {
-          downloadBtn.href = info.releaseUrl;
-          downloadBtn.style.display = 'inline-flex';
-        }
+        // 替换检查更新按钮为绿色前往下载
+        if (info.releaseUrl) this._swapToDownloadBtn(info.releaseUrl);
       } else {
         statusEl.innerHTML = `
           <div class="update-status up-to-date">
@@ -1192,16 +1363,45 @@ class SettingsApp {
             <div class="about-row" style="margin-top:6px;"><span class="about-label">当前版本</span><span class="about-value">v${info.currentVersion}</span></div>
             <div class="about-row"><span class="about-label">最新版本</span><span class="about-value">v${info.latestVersion || info.currentVersion}</span></div>
             <div class="about-row"><span class="about-label">上次检查</span><span class="about-value">${timeAgo}</span></div>
+            ${failedNote}
           </div>`;
-        if (downloadBtn) downloadBtn.style.display = 'none';
+        this._restoreCheckBtn();
       }
     } catch (e) {
       statusEl.innerHTML = `<div class="update-status pending">无法加载更新信息</div>`;
     }
   }
 
+  /** 将检查更新按钮替换为绿色前往下载链接 */
+  _swapToDownloadBtn(url) {
+    const oldBtn = document.getElementById('check-update-btn');
+    if (!oldBtn) return;
+    const a = document.createElement('a');
+    a.id = 'download-update-btn';
+    a.className = 'btn btn-primary';
+    a.href = url;
+    a.target = '_blank';
+    a.rel = 'noopener';
+    a.innerHTML = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="vertical-align:-2px;margin-right:3px;"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>前往下载`;
+    oldBtn.replaceWith(a);
+  }
+
+  /** 恢复为检查更新按钮（如果已被替换） */
+  _restoreCheckBtn() {
+    const dlBtn = document.getElementById('download-update-btn');
+    if (!dlBtn) return;
+    const btn = document.createElement('button');
+    btn.id = 'check-update-btn';
+    btn.className = 'btn';
+    btn.innerHTML = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="vertical-align:-2px;margin-right:3px;"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>检查更新`;
+    dlBtn.replaceWith(btn);
+  }
+
   async _onCheckUpdate() {
+    if (this._getUpdateChannel() === 'store') return; // 商店渠道由浏览器自动更新
     const statusEl = document.getElementById('update-status');
+    // 先恢复为检查按钮（可能之前已被替换为下载链接）
+    this._restoreCheckBtn();
     const btn = document.getElementById('check-update-btn');
     if (statusEl) statusEl.innerHTML = `<div class="update-status pending">
       <div class="spinner" style="width:16px;height:16px;border-width:2px;margin:0 8px 0 0;display:inline-block;vertical-align:middle;"></div>
@@ -1226,7 +1426,8 @@ class SettingsApp {
           <div style="font-size:12px;color:var(--text2);margin-top:4px;">${this._escapeHtml(e.message)}</div>
         </div>`;
     } finally {
-      if (btn) btn.disabled = false;
+      const checkBtn = document.getElementById('check-update-btn');
+      if (checkBtn) checkBtn.disabled = false;
     }
   }
 
@@ -1331,9 +1532,13 @@ SettingsApp.prototype._loadStorageStats = async function () {
     const cacheKeys = Object.keys(all).filter(k =>
       k.startsWith('domain_cache_')
     );
+    const icpApiCacheKeys = Object.keys(all).filter(k =>
+      k.startsWith('icp_api_v1_')
+    );
     const tabStateKeys = Object.keys(all).filter(k => k.startsWith('tab_state_'));
     const whitelist = all[STORAGE_KEYS.WHITELIST] || [];
     const blacklist = all[STORAGE_KEYS.DOWNLOAD_BLACKLIST] || [];
+    const siteBlacklist = all[STORAGE_KEYS.SITE_BLACKLIST] || [];
     const reports = all[STORAGE_KEYS.USER_REPORTS] || [];
 
     statsEl.innerHTML = `
@@ -1347,8 +1552,10 @@ SettingsApp.prototype._loadStorageStats = async function () {
         </div>
       </div>
       <div class="about-row"><span class="about-label">缓存记录</span><span class="about-value">${cacheKeys.length} 条</span></div>
+      <div class="about-row"><span class="about-label">ICP API 缓存</span><span class="about-value">${icpApiCacheKeys.length} 条</span></div>
       <div class="about-row"><span class="about-label">标签页状态</span><span class="about-value">${tabStateKeys.length} 个</span></div>
       <div class="about-row"><span class="about-label">白名单域名</span><span class="about-value">${Array.isArray(whitelist) ? whitelist.length : 0} 个</span></div>
+      <div class="about-row"><span class="about-label">站点黑名单</span><span class="about-value">${typeof siteBlacklist === 'object' ? Object.keys(siteBlacklist).length : 0} 条</span></div>
       <div class="about-row"><span class="about-label">下载黑名单</span><span class="about-value">${typeof blacklist === 'object' ? Object.keys(blacklist).length : 0} 条</span></div>
       <div class="about-row"><span class="about-label">上报记录</span><span class="about-value">${Array.isArray(reports) ? reports.length : 0} 条</span></div>
     `;

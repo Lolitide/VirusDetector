@@ -5,204 +5,9 @@
  */
 
 // ==================== 外国网站ICP豁免白名单 ====================
-// 这些是全球知名非中国站点，确定不需要ICP备案
-// 按分类组织，覆盖主流全球网站、软件、平台
-const ICP_EXEMPT_DOMAINS = new Set([
-  // —— 全球科技巨头 ——
-  'google.com', 'google.com.hk', 'google.co.jp', 'google.co.uk',
-  'youtube.com', 'youtu.be', 'yt.be',
-  'microsoft.com', 'live.com', 'outlook.com', 'office.com',
-  'apple.com', 'icloud.com', 'mac.com',
-  'amazon.com', 'amazon.co.jp', 'amazon.co.uk', 'amazon.de',
-  'meta.com', 'facebook.com', 'instagram.com', 'whatsapp.com',
-  'threads.net',
-
-  // —— 社交媒体 / 论坛 ——
-  'twitter.com', 'x.com', 't.co',
-  'reddit.com', 'redd.it',
-  'discord.com', 'discord.gg',
-  'telegram.org', 't.me',
-  'signal.org',
-  'linkedin.com',
-  'pinterest.com',
-  'tumblr.com',
-  'snapchat.com',
-  'tiktok.com',
-  'quora.com',
-  'medium.com',
-
-  // —— 开发者平台 ——
-  'github.com', 'github.io',
-  'gitlab.com',
-  'bitbucket.org',
-  'stackoverflow.com', 'stackexchange.com', 'serverfault.com',
-  'superuser.com', 'askubuntu.com',
-  'npmjs.com', 'npmjs.org',
-  'pypi.org', 'python.org',
-  'rubygems.org',
-  'crates.io',
-  'docker.com', 'docker.io',
-  'kubernetes.io',
-  'sourceforge.net',
-  'codepen.io',
-  'jsfiddle.net',
-  'codesandbox.io',
-  'replit.com',
-  'vercel.com', 'vercel.app',
-  'netlify.com', 'netlify.app',
-  'heroku.com', 'herokuapp.com',
-  'cloudflare.com', 'cloudflarepages.dev',
-  'firebase.google.com', 'firebaseapp.com',
-  'jetbrains.com',
-
-  // —— 科研 ——
-  'mathworks.com',
-
-  // —— 百科 / 知识 ——
-  'wikipedia.org', 'wikimedia.org', 'wikiwand.com',
-  'mozilla.org', 'developer.mozilla.org',
-  'w3.org', 'w3schools.com',
-  'vndb.org',
-
-  // —— 非中国软件 / 工具 ——
-  'firefox.com',
-  'rarlab.com', 'win-rar.com',
-  '7-zip.org',
-  'bandisoft.com', 'bandizip.com',
-  'cpuid.com',
-  'teamviewer.com', 'teamviewer.cn',
-  'anydesk.com', 'anydesk.cn',
-  'internetdownloadmanager.com',
-  'bitcomet.com',
-  'v2ex.com',
-
-  // —— 视频 / 流媒体 ——
-  'netflix.com',
-  'spotify.com',
-  'twitch.tv',
-  'vimeo.com',
-  'dailymotion.com',
-  'disneyplus.com',
-  'hbomax.com',
-  'hulu.com',
-  'primevideo.com',
-
-  // —— 电商（非中国）——
-  'ebay.com', 'ebay.co.uk',
-  'etsy.com',
-  'shopify.com', 'myshopify.com',
-
-  // —— 游戏平台 ——
-  'steampowered.com', 'steamcommunity.com', 'steam.com',
-  'epicgames.com',
-  'minecraft.net',
-  'ea.com', 'origin.com',
-  'ubisoft.com', 'ubisoftconnect.com',
-  'roblox.com',
-  'gog.com',
-  'humblebundle.com',
-  'itch.io',
-  'nintendo.com',
-  'playstation.com',
-  'xbox.com',
-  'dlsite.com',
-
-  // —— 云服务 / SaaS ——
-  'dropbox.com', 'dropboxusercontent.com',
-  'box.com',
-  'notion.so', 'notion.com',
-  'slack.com',
-  'zoom.us', 'zoom.com',
-  'atlassian.com', 'jira.com', 'confluence.com', 'trello.com',
-  'figma.com',
-  'canva.com',
-  'miro.com',
-  'linear.app',
-  'airtable.com',
-  'typeform.com',
-  'surveymonkey.com',
-  'mailchimp.com',
-  'sendgrid.net',
-  'twilio.com',
-  'stripe.com',
-  'vultr.com',
-  'cloudcone.com',
-
-  // —— AI / 研究 ——
-  'openai.com', 'chatgpt.com',
-  'anthropic.com', 'claude.ai',
-  'huggingface.co',
-  'kaggle.com',
-  'arxiv.org',
-  'deepmind.google.com',
-
-  // —— 操作系统 / 发行版 ——
-  'ubuntu.com',
-  'debian.org',
-  'archlinux.org',
-  'fedora.org', 'fedoraproject.org',
-  'centos.org',
-  'kali.org',
-  'linux.org',
-  'freebsd.org',
-  'gnu.org',
-  'apache.org',
-
-  // —— 其他常见全球站点 ——
-  'archive.org',
-  'change.org',
-  'kickstarter.com',
-  'patreon.com',
-  'paypal.com',
-  'wix.com',
-  'wordpress.com', 'wordpress.org',
-  'blogger.com', 'blogspot.com',
-  'weebly.com',
-  'godaddy.com',
-  'namecheap.com',
-  'duckduckgo.com',
-  'proton.me', 'protonmail.com',
-  'mega.nz', 'mega.io',
-  'mediafire.com',
-
-  // —— 教育机构（全局匹配 .edu / .edu.cn / .edu.jp 等）——
-  'edu',
-  'edu.cn',
-  'edu.jp',
-  'ac.jp',        // 日本学术机构（如 u-tokyo.ac.jp）
-  'ac.cn',        // 中国科研机构（如 cas.ac.cn）
-  'ac.kr',        // 韩国学术机构
-  'ac.uk',        // 英国学术机构
-  'ac.th',        // 泰国学术机构
-
-  // —— 政府机构（全局匹配 .gov / .gov.cn 等）——
-  'gov',
-  'gov.cn',
-  'gov.hk',
-  'gov.tw',
-  'go.jp',        // 日本政府
-  'go.kr',        // 韩国政府
-  'gov.uk',       // 英国政府
-  'gov.au',       // 澳大利亚政府
-  'gov.sg',       // 新加坡政府
-
-  // —— 保留/专用域名（不暴露公网，无需 ICP 备案）——
-  // 本地/内网专用（RFC 6761/6762/8375，不暴露公网）
-  'local',         // RFC 6762: 局域网 mDNS（打印机/NAS/树莓派）
-  'localhost',     // RFC 6761: 本机回环（127.0.0.1）
-  'home.arpa',     // RFC 8375: 家庭内网
-  'internal',      // ICANN 保留: 企业内部网络
-  'test',          // RFC 6761: 开发测试
-  // 文档/示例专用（RFC 2606/6761，禁止实际使用）
-  'example',       // RFC 6761: 文档示例（www.example.com）
-  'example.com',   // RFC 2606: 通用示例域名
-  'example.net',   // RFC 2606: 通用示例域名
-  'example.org',   // RFC 2606: 通用示例域名
-  // 反向解析与基础架构
-  'arpa',          // 根域: DNS 基础设施
-  'in-addr.arpa',  // RFC 1035: IPv4 反向解析
-  'ip6.arpa',      // RFC 3596: IPv6 反向解析
-]);
+// 这些是全球知名非中国站点，确定不需要ICP备案。
+// 名单已统一迁移至 utils/exemptions/index.js（导出 ICP_EXEMPT_DOMAINS），便于集中维护、避免重复登记。
+import { ICP_EXEMPT_DOMAINS } from '../utils/exemptions/index.js';
 
 /**
  * 从 domain-database 中动态提取非中国品牌的官方域名并加入豁免集合
@@ -316,6 +121,19 @@ export class IcpUtils {
   );
 
   /**
+   * 扩展格式：增值电信业务经营许可证等（省份简称 + 许可类型字母 + 数字 + "-" + 6位以上数字）
+   * 例：闽B2-20040099-1、粤B2-20201234-3。
+   * 这类号码不含 "ICP" 字样（区别于 ICP_FULL/SIMPLE_REGEX），是 4399 等站点的真实备案号格式。
+   * 盗用此类号码的钓鱼站（如 app-4399.com.cn）会被原正则漏检，故单独补充匹配。
+   * 设计约束：字母与短数字必须出现在主数字段前的连字符之前，且主数字段 ≥6 位，
+   * 以避免误匹配车牌（粤A·12345，用中间点且仅 5 位）等普通文本。
+   */
+  static ICP_LICENSE_REGEX = new RegExp(
+    `(${PROVINCE_PATTERN})\\s*[A-Za-z]\\d?\\s*-\\s*\\d{6,}(?:-\\d+)?`,
+    'gi'
+  );
+
+  /**
    * 公安备案号正则
    * 格式: 省份简称 + 公网安备 + 数字 + 号
    * 允许各段之间有可选空格（如 "沪公网安备 31010502000878号"）
@@ -367,6 +185,17 @@ export class IcpUtils {
           }
         }
       }
+
+      // 扩展：经营性许可证格式（闽B2-20040099-1 等，无 ICP 字样）
+      if (results.length === 0) {
+        for (const str of domIcpStrings) {
+          const matches = str.match(this.ICP_LICENSE_REGEX);
+          if (matches) {
+            results.push(...matches);
+            source = 'dom_footer_license';
+          }
+        }
+      }
     }
 
     // 如果DOM没找到，搜索整个页面文本
@@ -381,13 +210,19 @@ export class IcpUtils {
           results.push(...policeMatches);
           source = 'page_text_police';
         } else {
-          const simpleMatches = pageText.match(this.ICP_SIMPLE_REGEX);
-          if (simpleMatches) {
-            results.push(...simpleMatches.map(m => m + '号'));
-            source = 'page_text_simple';
+        const simpleMatches = pageText.match(this.ICP_SIMPLE_REGEX);
+        if (simpleMatches) {
+          results.push(...simpleMatches.map(m => m + '号'));
+          source = 'page_text_simple';
+        } else {
+          const licenseMatches = pageText.match(this.ICP_LICENSE_REGEX);
+          if (licenseMatches) {
+            results.push(...licenseMatches);
+            source = 'page_text_license';
           }
         }
       }
+    }
     }
 
     // 去重
@@ -516,7 +351,13 @@ export class IcpUtils {
     }
 
     const cjkRatio = cjkCount / totalChars;
-    const hasCJK = (cjkCount >= 30 && cjkRatio >= 0.08) || cjkCount >= 500;
+    // 放宽判定：中文钓鱼页常中英混排（大量英文按钮/URL/版本号），
+    // 原 0.08 占比阈值会把「有中文但英文更多」的页面误判为非中文，
+    // 进而被规则三当成外国站跳过备案检查。改为：
+    //   · ≥20 个汉字且占比≥0.02  → 视为中文页面
+    //   · 或 ≥120 个汉字（密度很高，无论如何视为中文）
+    // 纯英文外国站（如 revouninstaller.com 仅 7 汉字）仍正确判为非中文。
+    const hasCJK = (cjkCount >= 20 && cjkRatio >= 0.02) || cjkCount >= 120;
 
     return { hasCJK, cjkCount, cjkRatio };
   }

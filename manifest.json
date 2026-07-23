@@ -1,8 +1,9 @@
 {
   "manifest_version": 3,
   "name": "银狐木马检测 - Virus Detector",
-  "version": "2.5.0",
-  "version_name": "2.5.0",
+  "default_locale": "zh_CN",
+  "version": "2.5.1",
+  "version_name": "2.5.1",
   "description": "检测银狐木马钓鱼网站，通过域名分析、ICP备案检查、下载检测、链接分析和代码工程化检测保护您的数字安全",
   "permissions": [
     "activeTab",
@@ -17,8 +18,8 @@
     "http://*/*",
     "https://*/*"
   ],
-  "firefox:background": {
-    "scripts": ["background/service-worker.js"],
+  "background": {
+    "service_worker": "background/service-worker.js",
     "type": "module"
   },
   "content_scripts": [

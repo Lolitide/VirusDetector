@@ -70,6 +70,7 @@ async function _getApiTimeout() {
 
 /** @type {BootstrapCache|null} */
 let _bootstrapCache = null;
+let _bootstrapPromise = null;  // 互斥锁：防止并发重复下载 IANA 引导文件
 
 /**
  * 硬编码的常用 gTLD → RDAP 服务器回退映射。
@@ -213,13 +214,24 @@ async function _ensureBootstrap() {
     return _bootstrapCache;
   }
 
-  // 尝试从 IANA 下载
+  // 如果已有下载进行中，等待现有 Promise（防止并发重复下载 IANA 引导文件）
+  if (_bootstrapPromise) {
+    return _bootstrapPromise;
+  }
+
+  _bootstrapPromise = (async () => {
+    try {
+      return await _fetchBootstrap();
+    } catch (error) {
+      console.error('[RdapClient] IANA 引导文件下载失败:', error.message);
+      return _buildFallbackCache();
+    }
+  })();
+
   try {
-    return await _fetchBootstrap();
-  } catch (error) {
-    console.error('[RdapClient] IANA 引导文件下载失败:', error.message);
-    // 回退到硬编码映射
-    return _buildFallbackCache();
+    return await _bootstrapPromise;
+  } finally {
+    _bootstrapPromise = null;
   }
 }
 
@@ -228,6 +240,7 @@ async function _ensureBootstrap() {
  */
 function _clearBootstrapCache() {
   _bootstrapCache = null;
+  _bootstrapPromise = null;
 }
 
 /**

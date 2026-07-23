@@ -1,0 +1,8 @@
+{
+  "appName": {
+    "message": "银狐木马检测 - Virus Detector"
+  },
+  "appDescription": {
+    "message": "检测银狐木马钓鱼网站，通过域名分析、ICP备案检查、下载检测、链接分析和代码工程化检测保护您的数字安全"
+  }
+}

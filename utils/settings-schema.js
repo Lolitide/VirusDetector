@@ -158,7 +158,7 @@ export const SETTINGS_DEFAULTS = {
   emojiDensityCheck: true,
   emoji_keywordMatchThreshold: 1,
   emoji_minTextLength: 100,
-  emoji_densityMaxScore: 30,
+  emoji_densityMaxScore: 20,
   emoji_densityThresholdLow: 2.0,
   emoji_densityThresholdHigh: 10.0,
   code_signalsFull: 3,
@@ -172,7 +172,14 @@ export const SETTINGS_DEFAULTS = {
 
   // === 隐私与数据 (basic) ===
   allowAnonymousReporting: true,
-  autoWhitelistFalsePositive: true
+  autoWhitelistFalsePositive: true,
+
+  // === ICP 备案 API 核验（配置页可控） ===
+  icpApiEnabled: true,          // 总开关：关闭则回退页面文本扫描
+  icpApiProviderUapis: true,    // uapis.cn 数据源开关
+  icpApiProviderApihz: true,    // apihz.cn 数据源开关
+  icpApiApiahzId: '',           // 用户自有 apihz id（留空用内置公开凭据）
+  icpApiApiahzKey: ''           // 用户自有 apihz key
 };
 
 // ==================== Section 定义（驱动 UI 渲染） ====================
@@ -225,8 +232,8 @@ export const SECTIONS = [
         mode: 'basic',
         settings: [
           {
-            key: 'theme', type: 'theme', label: '浅色模式',
-            desc: '切换浅色/深色界面主题（设置页和弹窗均生效）',
+            key: 'theme', type: 'theme', label: '界面主题',
+            desc: '切换深色/浅色界面主题，或跟随系统配色（设置页和弹窗均生效）',
             mode: 'basic'
           },
           {
@@ -311,6 +318,58 @@ export const SECTIONS = [
     ]
   },
 
+  // ========== 2.5 备案查询 API ==========
+  {
+    id: 'icp-api',
+    label: '备案查询 API',
+    iconSVG: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
+    description: 'ICP 备案核验改为按域名调用官方备案库 API（uapis.cn / apihz.cn），页面文本扫描降级为兜底。',
+    mode: 'basic',
+    groups: [
+      {
+        id: 'icp-api-main',
+        label: 'API 核验开关',
+        iconSVG: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
+        mode: 'basic',
+        settings: [
+          {
+            key: 'icpApiEnabled', type: 'boolean', label: '启用备案 API 核验',
+            desc: '关闭后仅用页面文本扫描备案号（旧逻辑，误报率更高）。建议保持开启。',
+            mode: 'basic'
+          },
+          {
+            key: 'icpApiProviderUapis', type: 'boolean', label: '数据源：uapis.cn',
+            desc: '稳定免密钥的备案查询源，作为主数据源。',
+            mode: 'basic'
+          },
+          {
+            key: 'icpApiProviderApihz', type: 'boolean', label: '数据源：apihz.cn',
+            desc: '公开备案查询接口（约 10 次/分钟限流），作为备援数据源。',
+            mode: 'basic'
+          }
+        ]
+      },
+      {
+        id: 'icp-api-apihz',
+        label: 'apihz.cn 自定义凭据',
+        iconSVG: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>',
+        mode: 'advanced',
+        settings: [
+          {
+            key: 'icpApiApiahzId', type: 'text', label: 'apihz 接口 ID',
+            desc: '填写自有 apihz.cn 账号的 id 可绕过公共 10 次/分钟限流；留空使用内置公开凭据。',
+            mode: 'advanced', placeholder: '留空 = 使用内置公开凭据'
+          },
+          {
+            key: 'icpApiApiahzKey', type: 'text', label: 'apihz 接口 Key',
+            desc: '与上方 ID 配套的 key（在 apihz.cn 申请）。留空使用内置公开凭据。',
+            mode: 'advanced', placeholder: '留空 = 使用内置公开凭据'
+          }
+        ]
+      }
+    ]
+  },
+
   // ========== 5. 链接分析 ==========
   {
     id: 'links',
@@ -328,9 +387,11 @@ export const SECTIONS = [
           { key: 'link_samePageThreshold', type: 'number', label: '同页链接阈值', desc: '≥此数量触发同页链接检测', min: 2, max: 50, step: 1, mode: 'advanced' },
           { key: 'link_duplicateThreshold', type: 'number', label: '重复链接阈值', desc: '≥此数量触发重复链接检测', min: 2, max: 20, step: 1, mode: 'advanced' },
           { key: 'link_deadLinkThreshold', type: 'number', label: '死链阈值', desc: '≥此数量触发死链检测', min: 0, max: 20, step: 1, mode: 'advanced' },
-          { key: 'checkDeadLinks', type: 'boolean', label: '死链主动检测',
+          {
+            key: 'checkDeadLinks', type: 'boolean', label: '死链主动检测',
             desc: '发送 HEAD 请求验证死链（关闭后仅统计不验证，不影响计分）',
-            mode: 'advanced' }
+            mode: 'advanced'
+          }
         ]
       }
     ]
@@ -503,7 +564,18 @@ export const SECTIONS = [
     ]
   },
 
-  // ========== 10. 白名单 ==========
+  // ========== 10. 站点黑名单 ==========
+  {
+    id: 'site-blacklist',
+    label: '站点黑名单',
+    iconSVG: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>',
+    description: '管理已知的恶意网站域名。黑名单中的网站将被直接标记为高风险并触发警告。每行一个域名。',
+    mode: 'basic',
+    type: 'custom',
+    renderFn: '_renderSiteBlacklistSection'
+  },
+
+  // ========== 11. 白名单 ==========
   {
     id: 'whitelist',
     label: '白名单',
@@ -728,6 +800,11 @@ export function validateSetting(key, value) {
       return num;
     }
     case 'string':
+      // 主题值校验：仅允许 dark / light / auto
+      if (key === 'theme') {
+        const validThemes = ['dark', 'light', 'auto'];
+        return validThemes.includes(value) ? value : def;
+      }
       // select 类型：验证是否在 options 中
       if (def === 'medium' || def === 'dark' || def === 'custom') {
         const setting = findSettingMeta(key);

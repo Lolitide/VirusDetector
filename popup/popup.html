@@ -93,14 +93,15 @@
               <div class="gauge-arrow"></div>
             </div>
           </div>
+          <div class="status-badge safe" id="status-text">安全</div>
         </div>
-        <div class="status-badge safe" id="status-text">安全</div>
       </div>
 
-      <!-- 警告面板 -->
+    <!-- 警告面板 -->
       <div id="warning-panel" style="display: none">
         <div class="score-display danger" id="score-display-danger">
           <div class="score-main">
+            <div class="score-up">
             <div class="score-icon" id="warning-score-icon">
               <svg viewBox="0 0 24 24" width="44" height="44">
                 <path d="M12 2L1 22h22L12 2z" fill="#F44336" />
@@ -110,6 +111,8 @@
             <div class="score-value danger-color" id="warning-score-value">
               0
             </div>
+            </div>
+            <span class="info-value" id="warning-domain">-</span>
           </div>
           <div class="score-gauge">
             <div class="gauge-bar">
@@ -121,10 +124,11 @@
               <div class="gauge-arrow"></div>
             </div>
           </div>
-        </div>
-        <div class="status-badge danger" id="warning-status-text">
+          <div class="status-badge danger" id="warning-status-text">
           危险警告
         </div>
+        </div>
+        
         <div class="alert-box">
           <div class="alert-icon">
             <svg viewBox="0 0 24 24" width="24" height="24">
@@ -151,10 +155,27 @@
         </div>
       </div>
 
+      <!-- 黑名单面板 -->
+      <div id="blacklist-panel" style="display: none">
+        <div class="score-display blacklist">
+          <div class="score-icon" style="padding: 0px 0 4px 0">
+            <svg viewBox="0 0 24 24" width="44" height="44">
+              <circle cx="12" cy="12" r="11" fill="#F44336" />
+              <line x1="8" y1="8" x2="16" y2="16" stroke="white" stroke-width="3" stroke-linecap="round" />
+              <line x1="16" y1="8" x2="8" y2="16" stroke="white" stroke-width="3" stroke-linecap="round" />
+            </svg>
+          </div>
+          <div class="blacklist-hint">
+            <p>当前网站已加入黑名单，标记为恶意网站</p>
+            <p class="blacklist-hint-sub">移除黑名单可恢复安全检测</p>
+          </div>
+        </div>
+      </div>
+
       <!-- 白名单面板 -->
       <div id="whitelist-panel" style="display: none">
         <div class="score-display whitelist">
-          <div class="score-icon" style="padding: 8px 0 4px 0">
+          <div class="score-icon" style="padding: 0px 0 4px 0">
             <svg viewBox="0 0 24 24" width="44" height="44">
               <circle cx="12" cy="12" r="11" fill="#4CAF50" />
               <path d="M7 12l3 3 7-7" stroke="white" stroke-width="3" fill="none" stroke-linecap="round"
@@ -238,42 +259,26 @@
 
     <!-- 底部工具栏 -->
     <div id="footer">
-      <button id="report-false-btn" class="footer-btn report-btn mistake-btn" title="报告此网站为误报">
-        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"
-          stroke-linecap="round">
-          <circle cx="12" cy="12" r="10" />
-          <path d="M12 8v4M12 16h.01" />
-        </svg>
-        <span class="btn-label">此报告有误</span>
+      <button id="report-false-btn" class="footer-btn" title="报告此网站为误报">
+        <span class="btn-icon"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg></span>
+        <span class="btn-label">误报</span>
       </button>
-      <button id="report-phish-btn" class="footer-btn report-btn danger-btn" title="确认此网站为钓鱼网站">
-        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"
-          stroke-linecap="round">
-          <path d="M12 2L1 22h22L12 2z" />
-          <path d="M12 10v4M12 17.5v.5" />
-        </svg>
-        <span class="btn-label">鉴定为钓鱼</span>
+      <button id="report-phish-btn" class="footer-btn" title="确认此网站为钓鱼网站">
+        <span class="btn-icon"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2L1 22h22L12 2z"/><path d="M12 10v4M12 17.5v.5"/></svg></span>
+        <span class="btn-label">钓鱼</span>
       </button>
       <button id="whitelist-btn" class="footer-btn whitelist-btn" title="将当前网站加入白名单，跳过所有检测">
-        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"
-          stroke-linecap="round">
-          <path d="M12 2l3.1 6.3L22 9.3l-5 4.9 1.2 6.8-6.2-3.3-6.2 3.3 1.2-6.8-5-4.9 6.9-1z" />
-        </svg>
-        <span class="btn-label">加入白名单</span>
+        <span class="btn-icon"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2l3.1 6.3L22 9.3l-5 4.9 1.2 6.8-6.2-3.3-6.2 3.3 1.2-6.8-5-4.9 6.9-1z"/></svg></span>
+        <span class="btn-label">白名单</span>
+      </button>
+      <button id="blacklist-btn" class="footer-btn blacklist-btn" title="将当前网站加入站点黑名单，标记为恶意网站">
+        <span class="btn-icon"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg></span>
+        <span class="btn-label">黑名单</span>
       </button>
       <button id="refresh-btn" class="footer-btn" title="对网页病毒进行再检测">
-        <svg role="img" xmlns="http://www.w3.org/2000/svg" width="57px" height="57px" viewBox="0 0 24 24"
-          aria-labelledby="refreshIconTitle" stroke="currentColor" stroke-width="2" stroke-linecap="square"
-          stroke-linejoin="miter" fill="none">
-          <polyline points="22 12 19 15 16 12" />
-          <path
-            d="M11,20 C6.581722,20 3,16.418278 3,12 C3,7.581722 6.581722,4 11,4 C15.418278,4 19,7.581722 19,12 L19,14" />
-        </svg>
-        <span class="btn-label">重新测一遍</span>
+        <span class="btn-icon"><svg role="img" xmlns="http://www.w3.org/2000/svg" width="58px" height="58px" viewBox="0 0 22 24" aria-labelledby="refreshIconTitle" stroke="currentColor" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter" fill="none"><polyline points="22 12 19 15 16 12"/><path d="M11,20 C6.581722,20 3,16.418278 3,12 C3,7.581722 6.581722,4 11,4 C15.418278,4 19,7.581722 19,12 L19,14"/></svg></span>
+        <span class="btn-label">刷新</span>
       </button>
-      <span class="tip-up">有</span>
-      <span class="tip-down">问题</span>
-      <span class="tip-icon">?</span>
     </div>
   </div>
 

@@ -1,0 +1,17 @@
+{
+  "name": "virus-detector",
+  "version": "2.5.1",
+  "private": true,
+  "type": "module",
+  "description": "Development tooling for the Virus Detector browser extension",
+  "scripts": {
+    "lint": "eslint --max-warnings=0 .",
+    "check:manifest": "node -e \"JSON.parse(require('node:fs').readFileSync('manifest.json', 'utf8'))\"",
+    "check": "npm run check:manifest && npm run lint",
+    "test": "node --test tests/domain-database.test.mjs tests/extension-safety.test.mjs"
+  },
+  "devDependencies": {
+    "eslint": "^9.31.0",
+    "globals": "^16.3.0"
+  }
+}

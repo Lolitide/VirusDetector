@@ -22,64 +22,9 @@
  */
 
 // ==================== 可信平台域名集合 ====================
-
-const TRUSTED_PLATFORMS = new Set([
-  // ---- Wiki 平台 ----
-  'fandom.com',
-  'wikia.com',
-  'wikimedia.org',
-  'miraheze.org',
-  'wiki.gg',
-  'gamepedia.com',
-
-  // ---- 代码托管 Pages ----
-  'github.io',
-  'gitlab.io',
-  'bitbucket.io',
-  'sourceforge.io',
-  'codeberg.page',
-
-  // ---- PaaS / 静态站点托管 ----
-  'netlify.app',
-  'vercel.app',
-  'herokuapp.com',
-  'pages.dev',          // Cloudflare Pages
-  'surge.sh',
-  'glitch.me',
-  'onrender.com',
-  'fly.dev',
-  'workers.dev',        // Cloudflare Workers
-  'deno.dev',
-
-  // ---- 博客与内容平台 ----
-  'medium.com',
-  'wordpress.com',
-  'blogger.com',
-  'blogspot.com',
-  'tumblr.com',
-  'hatenablog.com',
-  'fc2.com',
-  'livejournal.com',
-  'typepad.com',
-  'substack.com',
-  'ghost.io',
-  'hashnode.dev',
-  'dev.to',
-
-  // ---- 文档与知识库 ----
-  'readthedocs.io',
-  'notion.site',
-  'gitbook.io',
-
-  // ---- 建站 / 个人页 ----
-  'weebly.com',
-  'wixsite.com',
-  'jimdo.com',
-  'strikingly.com',
-  'carrd.co',
-  'about.me',
-  'linktr.ee',
-]);
+// Wiki / 代码托管 / 博客 / 文档 / 建站等 UGC 平台，规则一(仿冒官网)跳过。
+// 名单已统一迁移至 utils/exemptions/index.js（导出 TRUSTED_PLATFORMS），便于集中维护。
+import { TRUSTED_PLATFORMS } from './exemptions/index.js';
 
 // ==================== TrustedPlatforms 工具类 ====================
 

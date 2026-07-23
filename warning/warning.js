@@ -8,11 +8,25 @@
 (function () {
   'use strict';
 
+  /**
+   * 验证 URL 协议，仅允许 http/https，防止 javascript: 等注入
+   * @param {string} url
+   * @returns {string} 安全 URL，无效时返回空字符串
+   */
+  function sanitizeUrl(url) {
+    if (!url || typeof url !== 'string') return '';
+    try {
+      const u = new URL(url);
+      if (u.protocol === 'http:' || u.protocol === 'https:') return url;
+    } catch (e) { /* fall through */ }
+    return '';
+  }
+
   // 从 URL 参数读取后台传入的检测结果
   const params = new URLSearchParams(window.location.search);
   const domain = params.get('domain') || '未知网站';
-  const score = parseInt(params.get('score')) || 0;
-  const correctUrl = params.get('correctUrl') || '';
+  const score = parseInt(params.get('score'), 10) || 0;
+  const correctUrl = sanitizeUrl(params.get('correctUrl') || '');
   const officialName = params.get('officialName') || '';
 
   // 渲染基本信息
@@ -81,10 +95,13 @@
   });
 
   // 返回安全页面：先关闭所有危险标签页，再打开正确官网，最后关闭警告弹窗
+  // 仅当 correctUrl 通过 sanitizeUrl 验证后才打开，否则仅关闭危险标签页和弹窗
   document.getElementById('btn-back-safe').addEventListener('click', async () => {
     clearAutoClose();
     await closeDangerousTabs(domain);
-    await openSafePage(correctUrl || 'https://www.baidu.com');
+    if (correctUrl) {
+      await openSafePage(correctUrl);
+    }
     window.close();
   });
 

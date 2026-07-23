@@ -7,7 +7,6 @@
  * @module resource-resolver/resource-graph
  */
 
-import { UrlUtils } from '../../utils/url-utils.js';
 
 // ==================== ResourceNode ====================
 

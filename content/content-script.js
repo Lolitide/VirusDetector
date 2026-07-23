@@ -36,6 +36,108 @@
     'portable', 'release', 'full version'
   ];
 
+  const AUTH_URL_PATTERN = /(?:^|[\/?#&=._-])(login|logon|logout|signin|sign-in|signout|sign-out|auth|oauth|authorize|sso|saml|2fa|mfa|otp|totp|challenge|verify|verification|webauthn|passkey|password|credential|credentials|session|callback|consent|recover|recovery|reset|device)(?:$|[\/?#&=._-])/i;
+  const AUTH_HOST_PATTERN = /^(login|logon|signin|auth|oauth|account|accounts|identity|id|sso|secure|security|verify|verification|console)\./i;
+  const AUTH_INTERACTION_PATTERN = /(login|logon|sign\s*in|authorize|verification|verify|passkey|webauthn|2fa|mfa|otp|登录|验证码|身份验证|双重验证|两步验证)/i;
+  const DISABLE_GUARD_EVENT = 'virus-detector:disable-navigation-guard';
+  const AUTH_CONTROL_SELECTOR = [
+    'input[type="password"]',
+    'input[autocomplete="current-password"]',
+    'input[autocomplete="new-password"]',
+    'input[autocomplete="one-time-code"]',
+    'input[name*="otp"]',
+    'input[id*="otp"]',
+    'input[name*="verification"]',
+    'input[id*="verification"]'
+  ].join(',');
+
+  function isSensitiveAuthenticationUrl(url) {
+    try {
+      const parsed = new URL(url, window.location.href);
+      if (AUTH_HOST_PATTERN.test(parsed.hostname)) return true;
+      return AUTH_URL_PATTERN.test(parsed.pathname + parsed.search + parsed.hash);
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function isAuthenticationPage() {
+    if (isSensitiveAuthenticationUrl(window.location.href)) return true;
+
+    try {
+      return document.querySelector(AUTH_CONTROL_SELECTOR) !== null;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  async function isCurrentPageWhitelisted() {
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: 'CHECK_WHITELIST',
+        payload: { url: window.location.href }
+      });
+      return response?.isWhitelisted === true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  let _watchingAuthenticationInteraction = false;
+  let _pageInterferenceDisabled = false;
+
+  function disablePageNavigationGuard() {
+    if (_pageInterferenceDisabled) return;
+    _pageInterferenceDisabled = true;
+
+    try {
+      document.dispatchEvent(new CustomEvent(DISABLE_GUARD_EVENT));
+    } catch (e) { /* ignore */ }
+
+    chrome.runtime.sendMessage({
+      type: 'AUTH_INTERACTION_DETECTED',
+      payload: { url: window.location.href }
+    }).catch(function() {});
+
+    if (_watchingAuthenticationInteraction) {
+      document.removeEventListener('click', handleAuthenticationInteraction, true);
+      document.removeEventListener('focusin', handleAuthenticationInteraction, true);
+      _watchingAuthenticationInteraction = false;
+    }
+  }
+
+  function handleAuthenticationInteraction(event) {
+    if (!event.target || typeof event.target.closest !== 'function') return;
+    const control = event.target.closest('a, button, input, form, [role="button"]');
+    if (!control) return;
+
+    const inputType = (control.getAttribute('type') || '').toLowerCase();
+    const autocomplete = (control.getAttribute('autocomplete') || '').toLowerCase();
+    const identity = [
+      control.getAttribute('href'), control.getAttribute('action'), control.id,
+      control.getAttribute('name'), control.getAttribute('aria-label'),
+      control.textContent
+    ].filter(Boolean).join(' ');
+
+    if (inputType === 'password' || autocomplete.includes('password') ||
+        autocomplete.includes('one-time-code') || AUTH_INTERACTION_PATTERN.test(identity)) {
+      disablePageNavigationGuard();
+    }
+  }
+
+  function watchForAuthenticationInteraction() {
+    if (_watchingAuthenticationInteraction) return;
+    document.addEventListener('click', handleAuthenticationInteraction, true);
+    document.addEventListener('focusin', handleAuthenticationInteraction, true);
+    _watchingAuthenticationInteraction = true;
+  }
+
+  async function shouldSkipPageAnalysis() {
+    const whitelisted = await isCurrentPageWhitelisted();
+    if (whitelisted) disablePageNavigationGuard();
+    return whitelisted;
+  }
+
   // ==================== 规则四：链接分析数据采集 ====================
 
   /**
@@ -99,7 +201,7 @@
           if (!isInNavigationZone(link)) {
             samePageLinks++;
           }
-        } else if (resolved.hostname === currentHost) {
+        } else if (resolved.hostname === currentHost && !isSensitiveAuthenticationUrl(resolved.href)) {
           // 同域名但不同路径 → 可能是死链候选
           deadLinkCandidates.push({ href: resolvedHref, text: (link.textContent || '').trim().substring(0, 50), element: link });
         }
@@ -159,7 +261,12 @@
 
       // 并行HEAD请求（原串行for循环改为Promise.allSettled，最坏耗时从15秒降至3秒）
       var deadCheckPromises = candidatesToCheck.map(function(candidate) {
-        return fetchWithTimeout(candidate.href, { method: 'HEAD' }, 3000)
+        return fetchWithTimeout(candidate.href, {
+          method: 'HEAD',
+          credentials: 'omit',
+          referrerPolicy: 'no-referrer',
+          cache: 'no-store'
+        }, 3000)
           .then(function(resp) { return { candidate: candidate, response: resp, error: null }; })
           .catch(function(err) { return { candidate: candidate, response: null, error: err }; });
       });
@@ -196,7 +303,11 @@
         duplicateLinks.push({
           href: href.substring(0, 200),
           elementCount: elements.size,
-          isDownloadLink: isDownloadLink
+          isDownloadLink: isDownloadLink,
+          isCrossDomain: (() => {
+            try { return new URL(href, location.href).hostname !== location.host; }
+            catch (e) { return false; }
+          })()
         });
       }
     });
@@ -403,7 +514,9 @@
       if (cp > 0xFFFF) i++;
     }
     const cjkRatio = textLength > 0 ? cjkCount / textLength : 0;
-    const hasCJK = (cjkCount >= 30 && cjkRatio >= 0.08) || cjkCount >= 500;
+    // 与 background/icp-utils.js 的 detectCJKContent 保持同一判定口径：
+    // 放宽阈值以兼容中英混排的中文钓鱼页（详见 icp-utils.js 注释）。
+    const hasCJK = (cjkCount >= 20 && cjkRatio >= 0.02) || cjkCount >= 120;
 
     const lowerText = bodyText.toLowerCase();
     let promoKeywordMatchCount = 0;
@@ -991,6 +1104,10 @@
 
   async function sendAnalysisResult(options) {
     options = options || {};
+    if (await shouldSkipPageAnalysis()) return;
+
+    const authenticationPage = isAuthenticationPage();
+    if (authenticationPage) disablePageNavigationGuard();
     // 每个采集函数独立 try-catch，一个失败不影响其他
     var bodyText = safeCollect(function() { return (document.body ? document.body.innerText : '') || ''; }, '');
     var pageMetrics = safeCollect(function() { return collectPageMetrics(bodyText); }, null);
@@ -998,7 +1115,9 @@
     // 链接分析含异步HEAD请求检测死链，需await
     var linkMetrics = null;
     try {
-      linkMetrics = await collectLinkMetrics({ checkDeadLinks: options.checkDeadLinks !== false });
+      linkMetrics = await collectLinkMetrics({
+        checkDeadLinks: options.checkDeadLinks !== false && !authenticationPage
+      });
     } catch (e) {
       console.error('[VirusDetector] 链接分析采集失败:', e);
     }
@@ -1070,9 +1189,17 @@
     if (message && message.type === 'REQUEST_PAGE_TEXT') {
       (async () => {
         try {
+          if (await shouldSkipPageAnalysis()) {
+            sendResponse({ success: false, skipped: 'whitelisted' });
+            return;
+          }
+          const authenticationPage = isAuthenticationPage();
+          if (authenticationPage) disablePageNavigationGuard();
           var linkMetrics = null;
           try {
-            linkMetrics = await collectLinkMetrics({ checkDeadLinks: _cachedCheckDeadLinks });
+            linkMetrics = await collectLinkMetrics({
+              checkDeadLinks: _cachedCheckDeadLinks && !authenticationPage
+            });
           } catch (e) {
             console.error('[VirusDetector] 链接分析采集失败:', e);
           }
@@ -1114,9 +1241,14 @@
   }
 
   async function init() {
+    if (await shouldSkipPageAnalysis()) return;
+
+    watchForAuthenticationInteraction();
     // 先读取用户设置中的 checkDeadLinks 偏好，再开始扫描
     _cachedCheckDeadLinks = await getCheckDeadLinksSetting();
-    scheduleAnalysis(600, { checkDeadLinks: _cachedCheckDeadLinks });
+    const authenticationPage = isAuthenticationPage();
+    if (authenticationPage) disablePageNavigationGuard();
+    scheduleAnalysis(600, { checkDeadLinks: _cachedCheckDeadLinks && !authenticationPage });
     // 二次扫描用于捕获懒加载内容，但跳过 HEAD 死链验证以降低页面和网络成本。
     scheduleAnalysis(3500, { checkDeadLinks: false });
   }
@@ -1124,7 +1256,7 @@
   if (document.readyState === 'complete' || document.readyState === 'interactive') {
     init();
   } else {
-    window.addEventListener('load', () => scheduleAnalysis(600, { checkDeadLinks: _cachedCheckDeadLinks }));
+    window.addEventListener('load', init, { once: true });
   }
 
 })();
