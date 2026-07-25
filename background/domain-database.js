@@ -565,7 +565,7 @@ const DOMAIN_DATABASE = [
   },
   {
     name: '通义千问',
-    officialDomains: ['tongyi.aliyun.com', 'qianwen.aliyun.com', 'qianwen.com', 'dashscope.console.aliyun.com', 'chat.qwen.ai'],
+    officialDomains: ['tongyi.aliyun.com', 'qianwen.aliyun.com', 'qianwen.com', 'dashscope.console.aliyun.com', 'chat.qwen.ai', 'platform.qianwenai.com'],
     correctUrl: 'https://tongyi.aliyun.com',
     category: SOFTWARE_CATEGORIES.AI_CHAT,
     keywords: ['通义千问', 'tongyi', 'qianwen', '阿里', '千问', '百炼'],
