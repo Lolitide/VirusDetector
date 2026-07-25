@@ -1,3 +1,5 @@
+import { UrlUtils } from '../utils/url-utils.js';
+
 /**
  * Virus Detector — 域名数据库 & 仿冒检测 (Domain Database)
  *
@@ -1274,6 +1276,16 @@ function longestCommonSuffix(a, b) {
 /** 关键词 → 品牌记录列表 映射（同一关键词可能属于多个品牌） */
 const keywordToEntries = new Map();
 
+/**
+ * 命名空间归属索引（按命名空间分组、buildIndex 一次性建好）。
+ * key = 注册域父级（如 sogou.com，由 officialDomains 经 UrlUtils.getMainDomain 推导），
+ * value = 拥有该命名空间的品牌条目。整域 *.sogou.com 都归该品牌所有，
+ * 避免 wubi.sogou.com / shouji.sogou.com 等真·子域被误报。
+ * 零新增数据、零文件膨胀：父域从既有 officialDomains 现算，无需逐条手写主域名。
+ * 注：父域推导改用语境已有的 UrlUtils.getMainDomain（PSL 感知，正确处理com.cn / co.uk 等二级后缀）
+ */
+const ownedNamespaces = new Map();
+
 /** 所有去重关键词，按长度从长到短排序（优先匹配长品牌词） */
 let sortedKeywords = [];
 
@@ -1299,6 +1311,9 @@ function buildIndex() {
       const normalized = domain.replace(/^www\./i, '').toLowerCase();
       domainToEntry.set(normalized, entry);
       allOfficialDomains.add(normalized);
+      // 按命名空间分组（一次性建索引）：整域 *.ns 都归该品牌所有（解决真·子域误报）
+      const ns = UrlUtils.getMainDomain(normalized);
+      if (!ownedNamespaces.has(ns)) ownedNamespaces.set(ns, entry);
     }
   }
 
@@ -1340,10 +1355,10 @@ export class DomainDatabase {
       return domainToEntry.get(normalized);
     }
     // 检查是否是官方域名的子域名
-    for (const [domain, entry] of domainToEntry) {
-      if (normalized.endsWith('.' + domain)) {
-        return entry;
-      }
+    // 命名空间归属：整域 *.ns 归该品牌（直接查一次性建好的索引，O(1)，无顺序扫描）
+    const ns = UrlUtils.getMainDomain(normalized);
+    if (ownedNamespaces.has(ns)) {
+      return ownedNamespaces.get(ns);
     }
     return null;
   }
