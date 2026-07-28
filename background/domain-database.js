@@ -27,13 +27,16 @@
  *
  * 仿冒检测策略（5 规则递进 + 去连字符二次检测，命中即返回）：
  *   A. 精确段匹配    → 标签段完全等于品牌关键词（所有长度）
- *   B. 标签子串包含  → 关键词在任一 label 中出现（仅 kw ≥ 5，任意位置不要求边界）
+ *   B. 标签子串包含  → 关键词在任一 label 中出现（kw ≥ 5；kw 5-6 字符须在标签边界，kw ≥ 7 无限制）
  *   C. 关键词堆叠    → 同一关键词在所有段中精确出现 ≥ 3 次（所有长度）
  *   D. 约束编辑距离  → Levenshtein ≤ 2 且 lenDiff ≤ 2（仅 kw ≥ 6）
  *
  *   去连字符二次检测：若域名含 - 或 _，去除后重新跑 A/B/C 规则，
  *   覆盖连字符插入 + 子串嵌入的复合变形（如 pay-pal-login.hl.cn）。
  */
+
+import { UrlUtils } from '../utils/url-utils.js';
+
 export const SOFTWARE_CATEGORIES = {
   SECURITY: '安全软件',
   BROWSER: '浏览器',
@@ -1266,6 +1269,16 @@ function longestCommonSuffix(a, b) {
 /** 关键词 → 品牌记录列表 映射（同一关键词可能属于多个品牌） */
 const keywordToEntries = new Map();
 
+/**
+ * 命名空间归属索引（按命名空间分组、buildIndex 一次性建好）。
+ * key = 注册域父级（如 sogou.com，由 officialDomains 经 UrlUtils.getMainDomain 推导），
+ * value = 拥有该命名空间的品牌条目。整域 *.sogou.com 都归该品牌所有，
+ * 避免 wubi.sogou.com / shouji.sogou.com 等真·子域被误报。
+ * 零新增数据、零文件膨胀：父域从既有 officialDomains 现算，无需逐条手写主域名。
+ * 注：父域推导使用 UrlUtils.getMainDomain（PSL 感知，正确处理 com.cn/co.uk 等二级后缀）。
+ */
+const ownedNamespaces = new Map();
+
 /** 所有去重关键词，按长度从长到短排序（优先匹配长品牌词） */
 let sortedKeywords = [];
 
@@ -1291,6 +1304,9 @@ function buildIndex() {
       const normalized = domain.replace(/^www\./i, '').toLowerCase();
       domainToEntry.set(normalized, entry);
       allOfficialDomains.add(normalized);
+      // 按命名空间分组（一次性建索引）：整域 *.ns 都归该品牌所有（解决真·子域误报）
+      const ns = UrlUtils.getMainDomain(normalized);
+      if (!ownedNamespaces.has(ns)) ownedNamespaces.set(ns, entry);
     }
   }
 
@@ -1331,11 +1347,10 @@ export class DomainDatabase {
     if (domainToEntry.has(normalized)) {
       return domainToEntry.get(normalized);
     }
-    // 检查是否是官方域名的子域名
-    for (const [domain, entry] of domainToEntry) {
-      if (normalized.endsWith('.' + domain)) {
-        return entry;
-      }
+    // 命名空间归属：整域 *.ns 归该品牌（直接查一次性建好的索引，O(1)，无顺序扫描）
+    const ns = UrlUtils.getMainDomain(normalized);
+    if (ownedNamespaces.has(ns)) {
+      return ownedNamespaces.get(ns);
     }
     return null;
   }
@@ -1345,7 +1360,7 @@ export class DomainDatabase {
    *
    * 5 规则递进 + 去连字符二次检测（按关键词长度从长到短遍历，命中即返回）：
    *   A. 精确段匹配（所有长度）：任一 label 段完全等于关键词
-   *   B. 标签子串包含（仅 kw ≥ 5）：关键词在任一 label 中出现，不要求分隔符边界
+   *   B. 标签子串包含（仅 kw ≥ 5，kw 5-6 须在标签边界，kw ≥ 7 不限）：关键词在任一 label 中出现
    *   C. 关键词堆叠（所有长度）：同一关键词在所有段中精确出现 ≥ 3 次
    *   D. 约束编辑距离（仅 kw ≥ 6，dist ≤ 2，lenDiff ≤ 2）：Levenshtein 相似匹配
    *
@@ -1394,10 +1409,14 @@ export class DomainDatabase {
           }
         }
 
-        // ---- 规则 B：标签子串包含（仅 kw >= 5，任意位置不需边界） ----
+        // ---- 规则 B：标签子串包含（仅 kw >= 5，需在标签边界或 kw >= 7） ----
         if (kw.length >= 5) {
           for (const label of labels) {
             if (label.includes(kw)) {
+              // 短关键词（5-6 字符）须在标签边界位置（开头或结尾），
+              // 避免 mysogou.com / thepaypal.com 等正常域被误判；
+              // 长关键词（≥7 字符）本身足够特异，允许标签内任意位置
+              if (kw.length < 7 && !label.startsWith(kw) && !label.endsWith(kw)) continue;
               const entry = keywordToEntries.get(kw)[0];
               return {
                 entry,

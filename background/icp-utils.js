@@ -7,7 +7,7 @@
 // ==================== 外国网站ICP豁免白名单 ====================
 // 这些是全球知名非中国站点，确定不需要ICP备案。
 // 名单已统一迁移至 utils/exemptions/index.js（导出 ICP_EXEMPT_DOMAINS），便于集中维护、避免重复登记。
-import { ICP_EXEMPT_DOMAINS } from '../utils/exemptions/index.js';
+import { ICP_EXEMPT_DOMAINS } from '../utils/exemptions/icp-exempt.js';
 
 /**
  * 从 domain-database 中动态提取非中国品牌的官方域名并加入豁免集合

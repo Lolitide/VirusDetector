@@ -29,7 +29,7 @@ import { ResourceResolver } from './resource-resolver/index.js';
 import { registerNonChineseBrandDomains, IcpUtils } from './icp-utils.js';
 import { IcpApiClient } from './icp-api.js';
 import { UrlUtils } from '../utils/url-utils.js';
-import { isFullyTrusted } from '../utils/exemptions/index.js';
+import { isFullyTrusted } from '../utils/exemptions/fully-trusted.js';
 import {
   SCORE_THRESHOLD, DOWNLOAD_CONFIRM_THRESHOLD, RISK_LEVEL, MSG_TYPES,
   STORAGE_KEYS, CACHE_TTL, DETECT_NON_ARCHIVE_FILES_DEFAULT,

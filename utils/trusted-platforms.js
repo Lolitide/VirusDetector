@@ -24,7 +24,7 @@
 // ==================== 可信平台域名集合 ====================
 // Wiki / 代码托管 / 博客 / 文档 / 建站等 UGC 平台，规则一(仿冒官网)跳过。
 // 名单已统一迁移至 utils/exemptions/index.js（导出 TRUSTED_PLATFORMS），便于集中维护。
-import { TRUSTED_PLATFORMS } from './exemptions/index.js';
+import { TRUSTED_PLATFORMS } from './exemptions/trusted-platforms.js';
 
 // ==================== TrustedPlatforms 工具类 ====================
 
