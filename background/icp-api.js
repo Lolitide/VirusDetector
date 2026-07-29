@@ -25,7 +25,6 @@
  * @module icp-api
  */
 
-import { UrlUtils } from '../utils/url-utils.js';
 import { ICP_API_CONFIG, VERSION } from '../utils/constants.js';
 
 // ==================== 缓存与限流 ====================
@@ -103,7 +102,7 @@ export class IcpApiClient {
     // 总开关：设置中关闭 API 核验时直接跳过（调用方回退页面文本扫描）
     if (opts.enabled === false) return { queried: false, hasIcp: false, error: 'api disabled' };
 
-    const domain = UrlUtils.getMainDomain(hostname) || hostname.toLowerCase();
+    const domain = hostname.toLowerCase();
 
     // 命中缓存直接返回
     const cached = await readCache(domain);
