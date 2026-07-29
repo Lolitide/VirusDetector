@@ -34,6 +34,8 @@ const _FALLBACK_TLD = new Set([
   'mx', 'ca', 'us', 'th', 'vn', 'ph', 'my', 'id', 'pk', 'bd',
   // 常见多级公共后缀（DNS 不可用时的回退，覆盖最常用的场景）
   'com.cn', 'net.cn', 'org.cn', 'gov.cn', 'edu.cn', 'ac.cn',
+  // 全国34个省市自治区 地域cn后缀https://domain.miit.gov.cn/chinayu.jsp
+  'bj.cn', 'tj.cn', 'sh.cn', 'cq.cn', 'he.cn', 'sx.cn','nm.cn', 'ln.cn','jl.cn', 'hl.cn', 'js.cn', 'zj.cn', 'ah.cn', 'fj.cn','jx.cn','sd.cn', 'ha.cn', 'hb.cn', 'hn.cn', 'gd.cn','gx.cn', 'hi.cn', 'sc.cn', 'gz.cn', 'yn.cn', 'xz.cn', 'sn.cn', 'gs.cn', 'qh.cn', 'nx.cn', 'xj.cn', 'tw.cn', 'hk.cn', 'mo.cn',
   'co.uk', 'org.uk', 'ac.uk', 'gov.uk', 'me.uk', 'net.uk',
   'co.jp', 'or.jp', 'ne.jp', 'ac.jp', 'go.jp',
   'co.kr', 'or.kr', 'ne.kr', 'go.kr',
