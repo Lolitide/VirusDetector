@@ -983,6 +983,59 @@ select:focus {
   gap: 16px;
 }
 
+.bug-report-card {
+  border-left: 3px solid var(--orange);
+}
+
+.bug-report-layout {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.bug-report-copy {
+  min-width: 0;
+}
+
+.bug-report-copy h3 {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 6px;
+}
+
+.bug-report-copy p {
+  margin: 0 0 5px;
+  color: var(--text2);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.bug-report-privacy {
+  color: var(--text3);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+#bug-report-btn {
+  flex: 0 0 auto;
+  min-width: 112px;
+  justify-content: center;
+}
+
+#bug-report-btn.is-loading {
+  cursor: wait;
+  opacity: 0.75;
+}
+
+.bug-report-status {
+  min-height: 18px;
+  margin-top: 8px;
+  color: var(--text2);
+  font-size: 12px;
+}
+
 /* ===== Update Detection Card ===== */
 
 .update-status {
@@ -1028,6 +1081,16 @@ select:focus {
 
 /* ===== Responsive ===== */
 @media (max-width: 720px) {
+  .bug-report-layout {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  #bug-report-btn {
+    width: 100%;
+  }
+
   #sidebar {
     position: fixed;
     left: 0;

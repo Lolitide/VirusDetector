@@ -9,6 +9,7 @@
 
 import { SETTINGS_DEFAULTS, SECTIONS, SENSITIVITY_PRESETS, SCHEMA_VERSION, validateSetting } from '../utils/settings-schema.js';
 import { STORAGE_KEYS, MSG_TYPES, VERSION, UPDATE_CHANNEL } from '../utils/constants.js';
+import { buildBugReportUrl } from '../utils/bug-report.js';
 
 class SettingsApp {
   constructor() {
@@ -372,7 +373,7 @@ class SettingsApp {
 
     // click 事件委托
     app.addEventListener('click', (e) => {
-      const target = e.target.closest('.nav-item, [data-section], [data-preset], #import-btn, #export-btn, #reset-btn, .mode-segment, [data-action], #modal-cancel-btn, #modal-confirm-btn, #check-update-btn, #download-update-btn, .theme-seg');
+      const target = e.target.closest('.nav-item, [data-section], [data-preset], #import-btn, #export-btn, #reset-btn, .mode-segment, [data-action], #modal-cancel-btn, #modal-confirm-btn, #check-update-btn, #download-update-btn, #bug-report-btn, .theme-seg');
       if (!target) return;
 
       if (target.matches('.theme-seg')) {
@@ -409,6 +410,8 @@ class SettingsApp {
         this._showConfirm('确定要清除全部本地数据吗？包括缓存、白名单、黑名单和上报记录。<br>此操作不可撤销！', () => this._clearAllData());
       } else if (target.id === 'check-update-btn') {
         this._onCheckUpdate();
+      } else if (target.id === 'bug-report-btn') {
+        this._onBugReport();
       } else if (target.id === 'modal-cancel-btn') {
         this._hideModal();
       } else if (target.id === 'modal-confirm-btn') {
@@ -1433,6 +1436,98 @@ class SettingsApp {
 
   // ==================== 关于页 ====================
 
+  async _onBugReport() {
+    const button = document.getElementById('bug-report-btn');
+    const status = document.getElementById('bug-report-status');
+    if (!button) return;
+
+    button.disabled = true;
+    button.classList.add('is-loading');
+    if (status) status.textContent = '正在生成脱敏诊断信息...';
+
+    try {
+      const manifest = chrome.runtime.getManifest();
+      const [platform, diagnosticResponse, allStorage, bytesInUse] = await Promise.all([
+        chrome.runtime.getPlatformInfo(),
+        chrome.runtime.sendMessage({ type: MSG_TYPES.GET_DIAGNOSTICS }).catch(() => null),
+        chrome.storage.local.get(null),
+        chrome.storage.local.getBytesInUse(null).catch(() => 0)
+      ]);
+
+      const reportUrl = buildBugReportUrl({
+        extensionVersion: manifest.version_name || manifest.version,
+        manifestVersion: manifest.manifest_version,
+        browser: this._getBrowserDescription(),
+        os: this._getPlatformDescription(platform),
+        locale: navigator.language || 'unknown',
+        installType: this._getUpdateChannel(),
+        settings: this.settings,
+        storage: this._getDiagnosticStorageSummary(allStorage, bytesInUse),
+        logs: diagnosticResponse?.success ? diagnosticResponse.data : []
+      });
+
+      await chrome.tabs.create({ url: reportUrl });
+      if (status) status.textContent = '报告已在 GitHub 中打开，请检查内容后提交。';
+    } catch (e) {
+      console.error('[Settings] 生成 BUG 报告失败:', e);
+      if (status) status.textContent = `生成失败：${e.message}`;
+      this._showToast('无法生成 BUG 报告', 'error');
+    } finally {
+      button.disabled = false;
+      button.classList.remove('is-loading');
+    }
+  }
+
+  _getBrowserDescription() {
+    const brands = navigator.userAgentData?.brands;
+    if (Array.isArray(brands) && brands.length > 0) {
+      return brands
+        .filter((item) => !/not.?a.?brand/i.test(item.brand))
+        .map((item) => `${item.brand} ${item.version}`)
+        .join(', ');
+    }
+
+    const ua = navigator.userAgent || '';
+    const candidates = [
+      ['Edge', /Edg\/([\d.]+)/],
+      ['Opera', /OPR\/([\d.]+)/],
+      ['Firefox', /Firefox\/([\d.]+)/],
+      ['Chrome', /Chrome\/([\d.]+)/],
+      ['Safari', /Version\/([\d.]+).*Safari/]
+    ];
+    for (const [name, pattern] of candidates) {
+      const match = ua.match(pattern);
+      if (match) return `${name} ${match[1]}`;
+    }
+    return 'Unknown browser';
+  }
+
+  _getPlatformDescription(platform) {
+    if (!platform) return 'Unknown OS';
+    const osNames = {
+      win: 'Windows', mac: 'macOS', linux: 'Linux', cros: 'ChromeOS',
+      android: 'Android', openbsd: 'OpenBSD', fuchsia: 'Fuchsia'
+    };
+    const name = osNames[platform.os] || platform.os || 'Unknown OS';
+    return platform.arch ? `${name} (${platform.arch})` : name;
+  }
+
+  _getDiagnosticStorageSummary(all, bytesInUse) {
+    const count = (value) => Array.isArray(value)
+      ? value.length
+      : (value && typeof value === 'object' ? Object.keys(value).length : 0);
+
+    return {
+      bytesInUse: Math.max(0, Math.round(bytesInUse || 0)),
+      domainCacheEntries: Object.keys(all).filter((key) => key.startsWith(STORAGE_KEYS.DOMAIN_CACHE)).length,
+      tabStateEntries: Object.keys(all).filter((key) => key.startsWith(STORAGE_KEYS.TAB_STATE_PREFIX)).length,
+      whitelistEntries: count(all[STORAGE_KEYS.WHITELIST]),
+      siteBlacklistEntries: count(all[STORAGE_KEYS.SITE_BLACKLIST]),
+      downloadBlacklistEntries: count(all[STORAGE_KEYS.DOWNLOAD_BLACKLIST]),
+      priorReportEntries: count(all[STORAGE_KEYS.USER_REPORTS])
+    };
+  }
+
   _buildAboutHTML() {
     const manifest = chrome.runtime.getManifest();
     return `
@@ -1489,6 +1584,27 @@ class SettingsApp {
                 更新日志
               </a>
             </div>
+          </div>
+          <div class="about-card bug-report-card">
+            <div class="bug-report-layout">
+              <div class="bug-report-copy">
+                <h3>
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M8 2l1.88 1.88M14.12 3.88L16 2M9 7.13v-1a3 3 0 016 0v1"/><path d="M12 20c-3.31 0-6-2.69-6-6v-3a6 6 0 0112 0v3c0 3.31-2.69 6-6 6z"/><path d="M12 20v-9M6.53 9H3M6 13H2M17.47 9H21M18 13h4M8 19l-2 3M16 19l2 3"/>
+                  </svg>
+                  遇到问题？
+                </h3>
+                <p>生成包含扩展环境和近期错误的脱敏报告，并在 GitHub 中确认后提交。</p>
+                <span class="bug-report-privacy">不会收集网页内容、Cookie、访问记录或名单中的域名。</span>
+              </div>
+              <button id="bug-report-btn" class="btn btn-primary" type="button" title="生成诊断信息并打开 GitHub BUG 模板">
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M8 2l1.88 1.88M14.12 3.88L16 2M9 7.13v-1a3 3 0 016 0v1"/><path d="M12 20c-3.31 0-6-2.69-6-6v-3a6 6 0 0112 0v3c0 3.31-2.69 6-6 6z"/><path d="M12 20v-9M6.53 9H3M6 13H2M17.47 9H21M18 13h4"/>
+                </svg>
+                BUG 上报
+              </button>
+            </div>
+            <div id="bug-report-status" class="bug-report-status" role="status" aria-live="polite"></div>
           </div>
          
           <div class="about-card" id="storage-stats-card">

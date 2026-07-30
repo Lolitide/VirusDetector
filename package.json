@@ -8,7 +8,7 @@
     "lint": "eslint --max-warnings=0 .",
     "check:manifest": "node -e \"JSON.parse(require('node:fs').readFileSync('manifest.json', 'utf8'))\"",
     "check": "npm run check:manifest && npm run lint",
-    "test": "node --test tests/domain-database.test.mjs tests/extension-safety.test.mjs tests/report-privacy.test.mjs"
+    "test": "node --test tests/domain-database.test.mjs tests/extension-safety.test.mjs tests/report-privacy.test.mjs tests/bug-report.test.mjs"
   },
   "devDependencies": {
     "eslint": "^9.31.0",
