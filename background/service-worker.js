@@ -1274,6 +1274,7 @@ async function analyzePage(tabId, url, domain, pageMetrics, linkMetrics) {
         pageUrl: tabState.url || url,
         icpStrings: tabState.icpStrings || [],
         hasIcpGovLink: tabState.hasIcpGovLink || false,
+        textSignals: tabState.textSignals || null,   // ← 新增：携带同步阶段中文信号
         impersonating: syncResult.breakdown.rule1.triggered || false,
         oldRule3: {
           score: rule3Result.score || 0,
@@ -1472,7 +1473,7 @@ async function _applyIcpUpdate(snapshot, icpApi) {
     undefined,                       // pageText（同步阶段亦未传递）
     snapshot.icpStrings,
     snapshot.hasIcpGovLink,
-    undefined,                       // textSignals（同步阶段亦未传递）
+    snapshot.textSignals || tabState.textSignals || null,  // ←修复：传回中文信号，而非 undefined
     icpApi,
     snapshot.impersonating
   );
