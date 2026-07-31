@@ -60,6 +60,10 @@ export const SOFTWARE_CATEGORIES = {
   NEWS_INFO: '新闻/信息'
 };
 
+// 极短品牌词白名单：仅这些 <5 字符的关键词允许在标签边界做子串匹配（补丁 B / B2 规则）。
+// 经审核的短品牌 token；新增加短词时必须同步评估误报风险。
+const SHORT_SPOOF_KEYWORDS = new Set(['wps', '360']);
+
 const DOMAIN_DATABASE = [
   // ========== 安全软件 ==========
   {
@@ -1395,7 +1399,9 @@ export class DomainDatabase {
         for (const segs of labelSegs) {
           for (const seg of segs) {
             if (seg === kw) {
-              const entry = keywordToEntries.get(kw)[0];
+	    const entryList = keywordToEntries.get(kw);
+	    if (!Array.isArray(entryList) || entryList.length === 0) continue;
+	    const entry = entryList[0];
               return {
                 entry,
                 officialDomain: entry.officialDomains[0],
@@ -1408,33 +1414,58 @@ export class DomainDatabase {
           }
         }
 
-        // ---- 规则 B：标签子串包含（仅 kw >= 5，短关键词需在标签边界） ----
-        if (kw.length >= 5) {
-          for (const label of labels) {
-            if (label.includes(kw)) {
-              // 短关键词（5-6 字符）须在标签边界位置（开头或结尾），
-              // 避免 xbaidux.com 等正常域被误判；长关键词（≥7 字符）允许任意位置
-              if (kw.length < 7 && !label.startsWith(kw) && !label.endsWith(kw)) continue;
-              const entry = keywordToEntries.get(kw)[0];
-              return {
-                entry,
-                officialDomain: entry.officialDomains[0],
-                correctUrl: entry.correctUrl,
-                matchType: 'substring_include',
-                matchedBy: `标签 "${label}" 包含关键词 "${kw}"` +
-                  (source === 'dehyphened' ? '（去连字符）' : '')
-              };
-            }
+    // ----规则 B：极短品牌词边界匹配
+    if (kw.length < 5 && SHORT_SPOOF_KEYWORDS.has(kw)) {
+      const entryList = keywordToEntries.get(kw);
+      if (!Array.isArray(entryList) || entryList.length === 0) continue;
+      const entry = entryList[0];
+      
+      for (const segs of labelSegs) {
+        for (const seg of segs) {
+          if (seg !== kw && (seg.startsWith(kw) || seg.endsWith(kw))) {
+            return {
+              entry,
+              officialDomain: entry.officialDomains[0],
+              correctUrl: entry.correctUrl,
+              matchType: 'short_keyword_boundary',
+              matchedBy: `段 "${seg}" 边界含极短品牌词 "${kw}"（B2）` +
+                (source === 'dehyphened' ? '（去连字符）' : '')
+            };
           }
         }
+      }
+    }
 
-        // ---- 规则 C：关键词堆叠（所有长度，阈值 ≥3） ----
+    // ---- 规则 C：标签子串包含（仅 kw >= 5，短关键词需在标签边界） ----
+    if (kw.length >= 5) {
+      for (const label of labels) {
+        if (label.includes(kw)) {
+          // 5-6位关键词强制首尾边界，防止误伤
+          if (kw.length < 7 && !label.startsWith(kw) && !label.endsWith(kw)) continue;
+          const entryList = keywordToEntries.get(kw);
+          if (!Array.isArray(entryList) || entryList.length === 0) continue;
+          const entry = entryList[0];
+          return {
+            entry,
+            officialDomain: entry.officialDomains[0],
+            correctUrl: entry.correctUrl,
+            matchType: 'substring_include',
+            matchedBy: `标签 "${label}" 包含关键词 "${kw}"` +
+              (source === 'dehyphened' ? '（去连字符）' : '')
+          };
+        }
+      }
+    }
+
+        // ---- 规则 D：关键词堆叠（所有长度，阈值 ≥3） ----
         let hitCount = 0;
         for (const seg of allSegs) {
           if (seg === kw) hitCount++;
         }
         if (hitCount >= 3) {
-          const entry = keywordToEntries.get(kw)[0];
+	  const entryList = keywordToEntries.get(kw);
+	  if (!Array.isArray(entryList) || entryList.length === 0) continue;
+	  const entry = entryList[0];
           return {
             entry,
             officialDomain: entry.officialDomains[0],
