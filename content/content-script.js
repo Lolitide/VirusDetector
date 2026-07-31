@@ -935,6 +935,62 @@
 
     // 带src的脚本总数（含同源+外部，保留供参考）
     const totalScriptsWithSrc = document.querySelectorAll('script[src]').length;
+     
+    // ----  新强信号度量：混淆脚本 / 隐藏 iframe / 内联样式比 ----
+    // 信号A：混淆内联脚本（强信号源）。仅扫描无 src 的内联 <script>，命中打包/混淆器
+    // 特征才计，避免误伤普通最小化（minified）脚本。
+    const inlineScriptEls = Array.from(document.querySelectorAll('script:not([src])'));
+    let obfuscatedInlineScriptCount = 0;
+    for (let ix = 0; ix < inlineScriptEls.length; ix++) {
+      const code = inlineScriptEls[ix].textContent || '';
+      if (code.length < 80) continue;
+      let hit = false;
+      // (1) eval / new Function 解析长字符串 + 转义序列（典型打包器）
+      if (/(\beval|new\s+Function)\s*\(/.test(code) && /\\x[0-9a-f]{2}|\\u[0-9a-f]{4}/i.test(code)) {
+        hit = true;
+      // (2) 长 base64 / hex blob（>= 512 连续可打印，排除普通小串与标识符）
+      } else if (/(?:[A-Za-z0-9+/]{512,}={0,2})/.test(code) || /(?:[0-9a-f]{512,})/i.test(code)) {
+        hit = true;
+      // (3) fromCharCode / unescape 解码循环（多次出现）
+      } else if (/fromCharCode|String\.fromCharCode|unescape/.test(code) &&
+                 (code.match(/fromCharCode|unescape/g) || []).length >= 3) {
+        hit = true;
+      }
+      if (hit) obfuscatedInlineScriptCount++;
+    }
+
+    // 信号B：隐藏 iframe（强信号源）。视觉不可见的 iframe 是钓鱼 cloaking 典型手法；
+    // 仅多 iframe 叠套(>=2) 或 单体隐藏 + 自包含(data:/blob:/srcdoc) 才计，避免误伤
+    // 分析/验证等正常隐藏 widget（单体隐藏 iframe 常见）。
+    const iframeEls = Array.from(document.querySelectorAll('iframe'));
+    let hiddenIframeCount = 0;
+    let hiddenDataIframe = false;
+    for (let fx = 0; fx < iframeEls.length; fx++) {
+      const fel = iframeEls[fx];
+      const fstyle = (fel.getAttribute('style') || '').toLowerCase();
+      const fw = parseInt(fel.getAttribute('width') || '', 10);
+      const fh = parseInt(fel.getAttribute('height') || '', 10);
+      const hiddenByAttr = fel.hasAttribute('hidden');
+      const hiddenByStyle = /display\s*:\s*none/.test(fstyle) ||
+                            /visibility\s*:\s*hidden/.test(fstyle) ||
+                            /opacity\s*:\s*0(\b|\.)/.test(fstyle) ||
+                            /(position\s*:\s*(?:absolute|fixed))[^;}]*?(left|top|right|bottom)\s*:\s*-/.test(fstyle);
+      const zeroSize = (fw === 0 || fh === 0) ||
+                       /width\s*:\s*0/.test(fstyle) || /height\s*:\s*0/.test(fstyle);
+      if (hiddenByAttr || hiddenByStyle || zeroSize) {
+        hiddenIframeCount++;
+        const fsrc = (fel.getAttribute('src') || '').toLowerCase();
+        if (/^data:|^blob:/.test(fsrc) || fel.hasAttribute('srcdoc')) hiddenDataIframe = true;
+      }
+    }
+
+    // 信号C：内联样式比（强信号源）。克隆/钓鱼页常把样式全部内联（单文件克隆），
+    // 正常站多用外部样式表。ratio = (内联 style 属性 + <style> 块) / (上述 + <link rel=stylesheet>)。
+    const styleBlockCount = document.querySelectorAll('style').length;
+    const stylesheetLinkCount = document.querySelectorAll('link[rel="stylesheet"]').length;
+    const inlineStyleVolume = inlineStyles + styleBlockCount;
+    const totalStyleMech = inlineStyleVolume + stylesheetLinkCount;
+    const inlineStyleRatio = totalStyleMech > 0 ? inlineStyleVolume / totalStyleMech : 0;
 
     return {
       htmlLines,
@@ -948,6 +1004,13 @@
       generator,
       inlineStyles,
       headLinks,
+      //  新强信号度量字段
+      obfuscatedInlineScriptCount,
+      hiddenIframeCount,
+      hiddenDataIframe,
+      styleBlockCount,
+      stylesheetLinkCount,
+      inlineStyleRatio,
       url: window.location.href,
       hasExternalResources: hasExternalResources,
       totalExternalResources: totalExternalResources,

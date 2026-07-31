@@ -1124,6 +1124,30 @@ export class ScoringEngine {
       if (suspiciousScriptRefCount > 0) {
         strong.push(`异常JS引用${suspiciousScriptRefCount}个`);
       }
+      
+      // 信号5：混淆内联脚本（强，4.6 新增）—— 打包/混淆器特征，合法最小化脚本不命中
+      // 采集端已收紧（eval+转义 / 512+ base64 / 解码循环），此处仅按计数接入强信号。
+      const obfuscatedInlineScriptCount = pageMetrics.obfuscatedInlineScriptCount || 0;
+      if (obfuscatedInlineScriptCount >= 1) {
+        strong.push(`混淆内联脚本${obfuscatedInlineScriptCount}处`);
+      }
+
+      // 信号6：隐藏 iframe（强，4.6 新增）—— 多 iframe 叠套(>=2) 或 单体隐藏 + 自包含
+      // (data:/blob:/srcdoc)。单体隐藏 iframe（分析/验证 widget）属正常，不触发，避免误报。
+      const hiddenIframeCount = pageMetrics.hiddenIframeCount || 0;
+      const hiddenDataIframe = !!pageMetrics.hiddenDataIframe;
+      if (hiddenIframeCount >= 2 || (hiddenIframeCount >= 1 && hiddenDataIframe)) {
+        strong.push(`隐藏iframe${hiddenIframeCount}个`);
+      }
+
+      // 信号7：内联样式比过高（强，4.6 新增）—— 近全内联且体量可观，克隆/钓鱼页特征。
+      // 需 ratio >= 0.9 且 内联体量 >= 10，避免小页面偶发高比造成误报。
+      const inlineStyleRatio = pageMetrics.inlineStyleRatio || 0;
+      const inlineStyleVolume = (pageMetrics.inlineStyles || 0) + (pageMetrics.styleBlockCount || 0);
+      if (inlineStyleRatio >= 0.9 && inlineStyleVolume >= 10) {
+        strong.push(`内联样式比${Math.round(inlineStyleRatio * 100)}%(${inlineStyleVolume}处)`);
+      }
+
 
       const strongCount = strong.length;
       const weakCount = weak.length;
