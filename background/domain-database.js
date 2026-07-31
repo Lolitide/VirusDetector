@@ -1550,7 +1550,7 @@ export class DomainDatabase {
           }
         }
 
-    // ----规则 B：极短品牌词边界匹配
+    // ----规则 B ：极短品牌词边界匹配 ----
     if (kw.length < 5 && SHORT_SPOOF_KEYWORDS.has(kw)) {
       const entryList = keywordToEntries.get(kw);
       if (!Array.isArray(entryList) || entryList.length === 0) continue;
@@ -1590,9 +1590,26 @@ export class DomainDatabase {
               (source === 'dehyphened' ? '（去连字符）' : '')
           };
         }
-      }
+        // 内嵌轻量化逻辑：仅5位关键词，前4位 / 后4位一致就拦截
+        // 复用现有循环，不额外嵌套for，保证速度
+        if (kw.length === 5 && label.length > kw.length + 2) {
+        	const head4 = kw.slice(0, 4);
+        	const tail4 = kw.slice(1);
+        	if (label.startsWith(head4) || label.endsWith(tail4)) {
+        		const entryList = keywordToEntries.get(kw);
+        		if (!Array.isArray(entryList) || entryList.length === 0) continue;
+        		const entry = entryList[0];
+        		return {
+        			entry,
+        			officialDomain: entry.officialDomains[0],
+        			correctUrl: entry.correctUrl,
+        			matchType: 'short_5char_headtail',
+        			matchedBy: `5位关键词首尾4位重合高仿：${label} 近似 ${kw}`
+        		};
+        	}
+        }
     }
-
+}
         // ---- 规则 D：关键词堆叠（所有长度，阈值 ≥3） ----
         let hitCount = 0;
         for (const seg of allSegs) {
@@ -1611,9 +1628,67 @@ export class DomainDatabase {
               (source === 'dehyphened' ? '（去连字符）' : '')
           };
         }
+    }
+
+/* 规则E：高仿拼写模糊检测（三段定点采样版）
+    生效范围：仅关键词长度 >=6
+    检测点位：域名前缀、域名末尾、域名中间，各截取一段与关键词等长的文本
+    判定逻辑：编辑距离1~2 + 前后连续重合字符≥3位
+    不处理5位及以下短关键词，由前置首尾4位规则兜底 */
+  for (const kw of sortedKeywords) {
+  	if (kw.length < 6) continue;
+  	const kwAscii = kw.replace(/[\u4E00-\u9FFF]/g, '');
+  	const kwLen = kw.length;
+
+  	for (const label of labels) {
+  		if (kwAscii && label === kwAscii) continue;
+
+  		const candidates = new Set();
+      // 前缀精准截取关键词长度，修复kugomusic漏判
+      if (label.length >= kwLen) {
+      	candidates.add(label.slice(0, kwLen));
       }
-      return null;
-    };
+      // 后缀
+      if (label.length >= kwLen) {
+      	candidates.add(label.slice(-kwLen));
+      }
+      // 中间片段
+      const midIdx = Math.floor((label.length - kwLen) / 2);
+      if (midIdx > 0 && label.length >= kwLen) {
+      	candidates.add(label.slice(midIdx, midIdx + kwLen));
+      }
+
+      let isFake = false;
+      for (const piece of candidates) {
+      	const dist = _levenshtein(piece, kw);
+        // 允许1~2处字符篡改（数字替换、字母写错）
+        if (dist >= 1 && dist <= 2) {
+        	const lcp = longestCommonPrefix(piece, kw);
+        	const lcs = longestCommonSuffix(piece, kw);
+          // 前后连续重合字符≥3位才判定为高仿，降低误伤正常域名
+          if (Math.max(lcp, lcs) >= 3) {
+          	isFake = true;
+          	break;
+          }
+      }
+  }
+
+  if (isFake) {
+  	const entryList = keywordToEntries.get(kw);
+  	if (!Array.isArray(entryList) || entryList.length === 0) continue;
+  	const entry = entryList[0];
+  	return {
+  		entry,
+  		officialDomain: entry.officialDomains[0],
+  		correctUrl: entry.correctUrl,
+  		matchType: 'typosquat_sample',
+  		matchedBy: `采样片段命中高仿：域名段 "${label}" 近似关键词 "${kw}"`
+  	};
+  }
+}
+}
+return null;
+};
 
     // 2. 构建原始 labels / segments
     const labels = normalized.split('.');
