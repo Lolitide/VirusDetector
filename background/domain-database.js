@@ -122,6 +122,22 @@ const DOMAIN_DATABASE = [
     keywords: ['微步', 'threatbook', '微步在线'],
     isChineseBrand: true
   },
+  {
+    name: 'AdGuard',
+    officialDomains: ['adguard.com'],
+    correctUrl: 'https://adguard.com/',
+    category: SOFTWARE_CATEGORIES.SECURITY,
+    keywords: ['AdGuard', 'adguard'],
+    isChineseBrand: false
+  },
+  {
+    name: '卡巴斯基',
+    officialDomains: ['kaspersky.com', 'kaspersky.com.cn'],
+    correctUrl: 'https://www.kaspersky.com.cn/',
+    category: SOFTWARE_CATEGORIES.SECURITY,
+    keywords: ['卡巴斯基', 'Kaspersky', 'kaspersky'],
+    isChineseBrand: false
+  },
 // ========== 浏览器 ==========
   {
     name: '360浏览器',
@@ -390,6 +406,14 @@ const DOMAIN_DATABASE = [
     keywords: ['UU远程', 'uu远程', '网易uu', '网易uu远程'],
     isChineseBrand: true
   },
+  {
+    name: 'Canva',
+    officialDomains: ['canva.com'],
+    correctUrl: 'https://www.canva.com/',
+    category: SOFTWARE_CATEGORIES.OFFICE,
+    keywords: ['Canva', 'canva'],
+    isChineseBrand: false
+  },
 // ========== 视频网站 ==========
   {
     name: '腾讯视频',
@@ -445,6 +469,30 @@ const DOMAIN_DATABASE = [
     correctUrl: 'https://tv.sohu.com',
     category: SOFTWARE_CATEGORIES.VIDEO,
     keywords: ['搜狐视频', 'sohu视频', '搜狐', 'sohu'],
+    isChineseBrand: true
+  },
+  {
+    name: 'OBS Studio',
+    officialDomains: ['obsproject.com'],
+    correctUrl: 'https://obsproject.com/',
+    category: SOFTWARE_CATEGORIES.VIDEO,
+    keywords: ['OBS', 'OBS Studio', 'obs'],
+    isChineseBrand: false
+  },
+  {
+    name: 'Bandicam',
+    officialDomains: ['bandicam.com'],
+    correctUrl: 'https://www.bandicam.com/',
+    category: SOFTWARE_CATEGORIES.VIDEO,
+    keywords: ['Bandicam', 'bandicam'],
+    isChineseBrand: false
+  },
+  {
+    name: '剪映',
+    officialDomains: ['jianying.com'],
+    correctUrl: 'https://www.jianying.com/',
+    category: SOFTWARE_CATEGORIES.VIDEO,
+    keywords: ['剪映', 'jianying', 'CapCut'],
     isChineseBrand: true
   },
 // ========== 音乐软件 ==========
@@ -765,6 +813,30 @@ const DOMAIN_DATABASE = [
     keywords: ['雷神', 'thunderobot', '雷神商城', '雷神笔记本', '雷神电脑'],
     isChineseBrand: true
   },
+  {
+    name: '顺丰速运',
+    officialDomains: ['sf-express.com', 'sf.cn'],
+    correctUrl: 'https://www.sf-express.com/',
+    category: SOFTWARE_CATEGORIES.E_COMMERCE,
+    keywords: ['顺丰', 'SF', 'sf', '顺丰速运'],
+    isChineseBrand: true
+  },
+  {
+    name: '圆通速递',
+    officialDomains: ['yto.net.cn'],
+    correctUrl: 'https://www.yto.net.cn/',
+    category: SOFTWARE_CATEGORIES.E_COMMERCE,
+    keywords: ['圆通', '圆通速递', 'YTO'],
+    isChineseBrand: true
+  },
+  {
+    name: 'EMS',
+    officialDomains: ['ems.com.cn'],
+    correctUrl: 'https://www.ems.com.cn/',
+    category: SOFTWARE_CATEGORIES.E_COMMERCE,
+    keywords: ['EMS', 'ems', '邮政EMS'],
+    isChineseBrand: true
+  },
 // ========== 地图/出行 ==========
   {
     name: '百度地图',
@@ -985,6 +1057,70 @@ const DOMAIN_DATABASE = [
     isChineseBrand: true
   },
 
+  {
+    name: 'NVIDIA',
+    officialDomains: ['nvidia.com'],
+    correctUrl: 'https://www.nvidia.com/',
+    category: SOFTWARE_CATEGORIES.SYSTEM_TOOL,
+    keywords: ['NVIDIA', 'nvidia'],
+    isChineseBrand: false
+  },
+  {
+    name: 'AMD',
+    officialDomains: ['amd.com'],
+    correctUrl: 'https://www.amd.com/',
+    category: SOFTWARE_CATEGORIES.SYSTEM_TOOL,
+    keywords: ['AMD', 'amd'],
+    isChineseBrand: false
+  },
+  {
+    name: '华硕 ASUS',
+    officialDomains: ['asus.com'],
+    correctUrl: 'https://www.asus.com/',
+    category: SOFTWARE_CATEGORIES.SYSTEM_TOOL,
+    keywords: ['华硕', 'ASUS', 'asus'],
+    isChineseBrand: false
+  },
+  {
+    name: 'Rufus',
+    officialDomains: ['rufus.ie'],
+    correctUrl: 'https://rufus.ie/',
+    category: SOFTWARE_CATEGORIES.SYSTEM_TOOL,
+    keywords: ['Rufus', 'rufus'],
+    isChineseBrand: false
+  },
+  {
+    name: 'DiskGenius',
+    officialDomains: ['diskgenius.com'],
+    correctUrl: 'https://www.diskgenius.com/',
+    category: SOFTWARE_CATEGORIES.SYSTEM_TOOL,
+    keywords: ['DiskGenius', 'diskgenius', '分区助手'],
+    isChineseBrand: false
+  },
+  {
+    name: 'RealVNC',
+    officialDomains: ['realvnc.com'],
+    correctUrl: 'https://www.realvnc.com/',
+    category: SOFTWARE_CATEGORIES.SYSTEM_TOOL,
+    keywords: ['RealVNC', 'realvnc', 'VNC'],
+    isChineseBrand: false
+  },
+  {
+    name: '微软 PowerToys',
+    officialDomains: [],
+    correctUrl: 'https://learn.microsoft.com/zh-cn/windows/powertoys/',
+    category: SOFTWARE_CATEGORIES.SYSTEM_TOOL,
+    keywords: ['PowerToys', 'powertoys'],
+    isChineseBrand: false
+  },
+  {
+    name: 'Snipaste',
+    officialDomains: ['snipaste.com'],
+    correctUrl: 'https://www.snipaste.com/',
+    category: SOFTWARE_CATEGORIES.SYSTEM_TOOL,
+    keywords: ['Snipaste', 'snipaste'],
+    isChineseBrand: false
+  },
   // ========== 模拟器 ==========
   {
     name: '雷电模拟器',
