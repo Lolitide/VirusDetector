@@ -3,34 +3,37 @@
  * ─────────────────────────────────────────────────────────────────────────
  * 豁免层级：**完全跳过所有 8 条检测规则**（等同于用户白名单）。
  *
- * 匹配方式：后缀匹配（子域名自动继承信任）。
+ * 匹配方式：精确匹配或已知子域名匹配。
  *   例如 isFullyTrusted('www.moe.gov.cn') → true
- *        isFullyTrusted('sub.cas.ac.cn')  → true
+ *        isFullyTrusted('moe.gov.cn')     → true
  *
  * @module fully-trusted
  */
 
-// ==================== 完全信任域名后缀 ====================
-export const FULLY_TRUSTED_DOMAIN_SUFFIXES = new Set([
+// ==================== 完全信任域名 ====================
+export const FULLY_TRUSTED_DOMAINS = new Set([
   // —— 政府机构 ——
-  'gov.cn',       // 中国政府（严格审批，攻击者无法注册）
+  'gov.cn',       // 中国政府
   'gov.hk',       // 香港政府
   'gov.tw',       // 台湾政府
-
-  // —— 教育机构 ——
-  'edu.cn',       // 中国教育机构（CERNET 管理）
-
-  // —— 科研机构 ——
-  'ac.cn',        // 中国科研机构（如中国科学院 cas.ac.cn）
+  'moe.gov.cn',   // 中华人民共和国教育部
+  'cas.ac.cn',    // 中国科学院
+  'ustc.ac.cn',   // 中国科学技术大学
+  'tsinghua.edu.cn', // 清华大学
+  'pku.edu.cn',   // 北京大学
+  'fudan.edu.cn', // 复旦大学
+  'sjtu.edu.cn',  // 上海交通大学
+  'zju.edu.cn',   // 浙江大学
+  'nthu.edu.tw',  // 台湾清华大学
+  'ntu.edu.tw',   // 台湾大学
 ]);
 
 /**
  * 判断域名是否属于完全信任域（应跳过所有检测）。
  *
- * 通过后缀匹配实现子域名自动继承：
+ * 通过精确匹配或已知子域名匹配：
  *   1. 去掉 www. 前缀后转小写
- *   2. 在 FULLY_TRUSTED_DOMAIN_SUFFIXES 中精确匹配
- *   3. 若未匹配，逐级去掉左侧子域名段后重试
+ *   2. 在 FULLY_TRUSTED_DOMAINS 中精确匹配
  *
  * @param {string} domain - 主机名（如 "www.moe.gov.cn" 或 "moe.gov.cn"）
  * @returns {boolean} 是否完全信任
@@ -40,16 +43,13 @@ export function isFullyTrusted(domain) {
   const normalized = domain.replace(/^www\./i, '').toLowerCase();
 
   // 精确匹配
-  if (FULLY_TRUSTED_DOMAIN_SUFFIXES.has(normalized)) return true;
+  if (FULLY_TRUSTED_DOMAINS.has(normalized)) return true;
 
-  // 后缀匹配：子域名也继承信任
-  // 例如 www.moe.gov.cn → parts = ['www', 'moe', 'gov', 'cn']
-  //   i=1: parent = 'moe.gov.cn' → 不在集合
-  //   i=2: parent = 'gov.cn'     → 在集合 → 返回 true
+  // 已知子域名匹配：仅对顶级信任域（gov.cn 等）允许 www 子域名
   const parts = normalized.split('.');
-  for (let i = 1; i < parts.length; i++) {
-    const parent = parts.slice(i).join('.');
-    if (FULLY_TRUSTED_DOMAIN_SUFFIXES.has(parent)) return true;
+  if (parts.length > 2) {
+    const parent = parts.slice(1).join('.');
+    if (FULLY_TRUSTED_DOMAINS.has(parent)) return true;
   }
 
   return false;
