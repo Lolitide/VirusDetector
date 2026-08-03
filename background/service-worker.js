@@ -37,6 +37,9 @@ import { registerNonChineseBrandDomains, IcpUtils } from './icp-utils.js';
 import { IcpApiClient } from './icp-api.js';
 import { WhoisClient } from './whois-client.js';
 import { UrlUtils } from '../utils/url-utils.js';
+import {
+  normalizeWhitelistEntry, isWildcardPattern, matchWhitelistEntry, isWhitelistedDomain
+} from '../utils/whitelist-matcher.js';
 import { isFullyTrusted } from '../utils/exemptions/fully-trusted.js';
 import {
   SCORE_THRESHOLD, DOWNLOAD_CONFIRM_THRESHOLD, RISK_LEVEL, MSG_TYPES,
@@ -481,89 +484,157 @@ function cancelGateTimeout(tabId) {
 
 // ==================== 白名单管理 ====================
 // 白名单存储在 chrome.storage.local 中，键名为 STORAGE_KEYS.WHITELIST
-// 数据结构：string[] — 域名列表（不含协议和路径，如 "example.com"）
+// 数据结构：string[] — 域名/通配符列表（不含协议和路径，如 "example.com"）
+//   支持三种条目：
+//     - 精确域名：example.com            → 仅匹配该主机名
+//     - 通配符域名：*.example.com        → 匹配 example.com 及其所有子域名（任意层级）
+//     - 全匹配：*                         → 匹配所有域名（完全跳过检测，慎用）
 // 白名单中的域名完全跳过 5 规则检测，工具栏图标显示蓝色 "✓" 徽章
 //
-// 性能优化：内存缓存 + storage.onChanged 失效机制，避免每次操作都读存储。
+// 性能优化：内存缓存（精确域名 Set + 通配符数组）+ storage.onChanged 失效机制，
+// 精确匹配保持 O(1)，通配符按条目数线性匹配（白名单规模通常很小，可接受）。
 
-/** @type {Set<string>|null} 内存缓存的白名单域名集合 */
-let _whitelistCache = null;
+/** @type {Set<string>|null} 精确白名单域名集合（不含通配符，已规范化小写） */
+let _whitelistExact = null;
+/** @type {string[]|null} 通配符白名单条目（含 *，已规范化小写） */
+let _whitelistPatterns = null;
+/** @type {string[]|null} 原始白名单数组（用于增删等需要完整列表的操作） */
+let _whitelistRaw = null;
+
+/**
+ * 根据原始白名单数组重建内存索引（精确集合 + 通配符数组）
+ * @param {string[]} list
+ */
+function _buildWhitelistIndexes(list) {
+  const exact = new Set();
+  const patterns = [];
+  for (const entry of (list || [])) {
+    const norm = normalizeWhitelistEntry(entry);
+    if (!norm) continue;
+    if (isWildcardPattern(norm)) patterns.push(norm);
+    else exact.add(norm);
+  }
+  _whitelistExact = exact;
+  _whitelistPatterns = patterns;
+  _whitelistRaw = list || [];
+}
 
 /**
  * 从存储加载白名单（优先返回内存缓存）
  * @returns {Promise<string[]>}
  */
 async function loadWhitelist() {
-  if (_whitelistCache) {
-    return [..._whitelistCache];
+  if (_whitelistExact !== null) {
+    return [..._whitelistRaw];
   }
   try {
     const r = await chrome.storage.local.get(STORAGE_KEYS.WHITELIST);
     const list = r[STORAGE_KEYS.WHITELIST] || [];
-    _whitelistCache = new Set(list);
+    _buildWhitelistIndexes(list);
     return list;
   } catch (e) { return []; }
 }
 
 /** 使白名单内存缓存失效，下次 loadWhitelist 重新从存储读取 */
 function _invalidateWhitelistCache() {
-  _whitelistCache = null;
+  _whitelistExact = null;
+  _whitelistPatterns = null;
+  _whitelistRaw = null;
 }
 
 async function saveWhitelist(whitelist) {
   try {
-    await chrome.storage.local.set({ [STORAGE_KEYS.WHITELIST]: whitelist });
-    // 同步更新内存缓存
-    _whitelistCache = new Set(whitelist);
+    // 规范化 + 去重，保证存储中的条目形式统一（小写、无协议/路径/尾点）
+    const normalized = [...new Set(
+      (whitelist || []).map(d => normalizeWhitelistEntry(d)).filter(Boolean)
+    )];
+    await chrome.storage.local.set({ [STORAGE_KEYS.WHITELIST]: normalized });
+    // 同步更新内存缓存索引
+    _buildWhitelistIndexes(normalized);
   } catch (e) { /* ignore */ }
 }
 
 /**
  * 检查URL对应域名是否在白名单中
- * 优化：优先 O(1) 内存缓存查找，避免每次异步读存储
+ * 优化：优先 O(1) 精确集合查找，未命中再线性匹配通配符条目，避免每次异步读存储
  */
 async function isWhitelisted(url) {
   const domain = UrlUtils.extractHostname(url);
-  if (_whitelistCache) {
-    return _whitelistCache.has(domain);
+  if (_whitelistExact !== null) {
+    if (_whitelistExact.has(domain.toLowerCase())) return true;
+    for (const p of _whitelistPatterns) {
+      if (matchWhitelistEntry(domain, p)) return true;
+    }
+    return false;
   }
   const whitelist = await loadWhitelist();
-  return whitelist.includes(domain);
+  return isWhitelistedDomain(domain, whitelist);
 }
 
 /**
- * 将域名加入白名单
+ * 将域名加入白名单（支持传入通配符条目，例如 "*.example.com"）
  */
 async function addToWhitelist(url) {
-  const domain = UrlUtils.extractHostname(url);
-  // 白名单与黑名单互斥：加入白名单前先移出黑名单中可能存在的同一域名
-  await SiteBlacklist.remove(domain);
+  const entry = normalizeWhitelistEntry(UrlUtils.extractHostname(url));
+  if (!entry) return;
+
+  // 白名单与黑名单互斥：仅对精确域名执行黑名单移除；通配符条目不针对具体黑名单域名操作
+  if (!isWildcardPattern(entry)) {
+    await SiteBlacklist.remove(entry);
+  }
 
   // 先用内存缓存快速判断，避免无谓的存储读取
-  if (_whitelistCache && _whitelistCache.has(domain)) {
-    console.log('[ServiceWorker] 域名已在白名单:', domain);
+  if (_whitelistRaw && _whitelistRaw.some(d => normalizeWhitelistEntry(d) === entry)) {
+    console.log('[ServiceWorker] 域名已在白名单:', entry);
     return;
   }
   const whitelist = await loadWhitelist();
-  if (!whitelist.includes(domain)) {
-    whitelist.push(domain);
+  if (!whitelist.some(d => normalizeWhitelistEntry(d) === entry)) {
+    whitelist.push(entry);
     await saveWhitelist(whitelist);
-    console.log('[ServiceWorker] 已加入白名单:', domain);
+    console.log('[ServiceWorker] 已加入白名单:', entry);
   }
 }
 
 /**
  * 将域名从白名单移除
+ * 优先精确移除；若没有精确条目，则移除覆盖该域名的一个通配符条目
+ * （例如白名单含 *.example.com 时，对 sub.example.com 执行移除会删掉 *.example.com）
  */
 async function removeFromWhitelist(url) {
-  const domain = UrlUtils.extractHostname(url);
+  const entry = normalizeWhitelistEntry(UrlUtils.extractHostname(url));
+  if (!entry) return;
   const whitelist = await loadWhitelist();
-  const idx = whitelist.indexOf(domain);
+  let idx = whitelist.findIndex(d => normalizeWhitelistEntry(d) === entry);
+  if (idx === -1) {
+    idx = whitelist.findIndex(d => {
+      const norm = normalizeWhitelistEntry(d);
+      return isWildcardPattern(norm) && matchWhitelistEntry(entry, norm);
+    });
+  }
   if (idx !== -1) {
+    const removed = whitelist[idx];
     whitelist.splice(idx, 1);
     await saveWhitelist(whitelist);
-    console.log('[ServiceWorker] 已移出白名单:', domain);
+    console.log('[ServiceWorker] 已移出白名单:', removed);
   }
+}
+
+/**
+ * 从白名单数组中过滤掉指定域名：精确匹配项或覆盖该域的通配符项都会被移除
+ * @param {string[]} list
+ * @param {string} domain
+ * @returns {string[]} 过滤后的新数组
+ */
+function _filterWhitelistOutDomain(list, domain) {
+  const norm = normalizeWhitelistEntry(domain);
+  if (!norm) return list;
+  return (list || []).filter(d => {
+    const e = normalizeWhitelistEntry(d);
+    if (e === norm) return false;
+    if (isWildcardPattern(e) && matchWhitelistEntry(norm, e)) return false;
+    return true;
+  });
 }
 
 /**
@@ -2336,10 +2407,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           const domain = message.payload?.domain || '';
           const addedBy = message.payload?.addedBy || 'manual';
           if (!domain) { sendResponse({ success: false, error: '缺少 domain' }); return; }
-          // 白名单与黑名单互斥：加入黑名单时自动移出白名单
+          // 白名单与黑名单互斥：加入黑名单时自动移出白名单（精确项或覆盖该域的通配符项）
           const whitelist = await loadWhitelist();
-          if (whitelist.includes(domain)) {
-            await saveWhitelist(whitelist.filter(d => d !== domain));
+          const filtered = _filterWhitelistOutDomain(whitelist, domain);
+          if (filtered.length !== whitelist.length) {
+            await saveWhitelist(filtered);
           }
           await SiteBlacklist.add(domain, { addedBy });
           
@@ -2515,7 +2587,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case MSG_TYPES.BULK_UPDATE_WHITELIST: {
       const domains = (message.payload && message.payload.domains) ? message.payload.domains : [];
       saveWhitelist(domains).then(async () => {
-        _whitelistCache = new Set(domains);
         await removeBlockersFromWhitelistedTabs();
         console.log('[ServiceWorker] 白名单已批量更新:', domains.length, '个域名');
         sendResponse({ success: true, count: domains.length });
@@ -2601,7 +2672,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local') {
     if (changes[STORAGE_KEYS.WHITELIST]) {
-      _whitelistCache = null;
+      _invalidateWhitelistCache();
     }
     if (changes[STORAGE_KEYS.DOWNLOAD_BLACKLIST]) {
       DownloadBlacklist.invalidateCache();

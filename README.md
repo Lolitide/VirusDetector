@@ -409,6 +409,11 @@ Timeline:  document_start       page load        content script reports      use
 - 工具栏图标右下角显示蓝色对勾徽章
 - 弹窗显示绿色对勾 + 提示文字
 - 支持一键移出白名单并立即重新触发检测
+- **支持域名通配符**（在设置页「白名单」中编辑）：
+  - `example.com` —— 仅精确匹配该域名
+  - `*.example.com` —— 匹配 `example.com` 及其**所有子域名**（任意层级，如 `www.example.com`、`a.b.example.com`）
+  - `*` —— 匹配所有域名（完全跳过检测，**请谨慎使用**）
+  - 条目不区分大小写，自动忽略误粘贴的协议 / 路径 / 端口；例如输入 `https://*.Example.com/path` 会被规范化为 `*.example.com`
 
 #### 缓存策略
 

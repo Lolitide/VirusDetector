@@ -19,6 +19,7 @@
  */
 
 import { SETTINGS_DEFAULTS, SECTIONS, SENSITIVITY_PRESETS, SCHEMA_VERSION, validateSetting, migrateSettings } from '../utils/settings-schema.js';
+import { normalizeWhitelistEntry } from '../utils/whitelist-matcher.js';
 import {
   STORAGE_KEYS, MSG_TYPES, VERSION, UPDATE_CHANNEL,
   UI_KEYS, ADVANCED_ONLY_SECTIONS, PRESET_LEVELS,
@@ -839,7 +840,7 @@ class SettingsApp {
             提示：也可以通过弹窗中的星形按钮快速将当前网站加入白名单
           </div>
           <div class="list-editor-wrapper">
-            <textarea id="whitelist-editor" class="list-editor" placeholder="每行输入一个域名，例如：&#10;example.com&#10;trusted-site.org" spellcheck="false"></textarea>
+            <textarea id="whitelist-editor" class="list-editor" placeholder="每行一个条目，支持域名通配符，例如：&#10;example.com            （仅精确域名）&#10;*.example.com        （example.com 及其所有子域名）&#10;*                   （匹配所有域名，慎用）" spellcheck="false"></textarea>
             <div class="list-editor-count" id="whitelist-count"></div>
           </div>
           <div class="list-actions">
@@ -887,12 +888,13 @@ class SettingsApp {
     if (el) el.innerHTML = `共 <strong>${count}</strong> 个域名`;
   }
 
-  /** 保存白名单：解析 textarea → 去重去空 → 批量写入 storage */
+  /** 保存白名单：解析 textarea → 规范化去重去空 → 批量写入 storage */
   async _saveWhitelist() {
     const editor = document.getElementById('whitelist-editor');
     if (!editor) return;
-    const lines = editor.value.split(/[\n\r]+/).map(s => s.trim()).filter(Boolean);
-    const domains = [...new Set(lines)];    try {
+    const lines = editor.value.split(/[\n\r]+/).map(s => normalizeWhitelistEntry(s)).filter(Boolean);
+    const domains = [...new Set(lines)];
+    try {
       await chrome.storage.local.set({ [STORAGE_KEYS.WHITELIST]: domains });
       // 通知 Service Worker 刷新内存缓存
       try {
@@ -908,18 +910,14 @@ class SettingsApp {
     }
   }
 
-  /** 从 .txt 文件导入白名单（合并去重） */
+  /** 从 .txt 文件导入白名单（合并去重，自动规范化域名/通配符） */
   async _importWhitelist(file) {
     try {
       const text = await file.text();
-      const newDomains = text.split(/[\n\r]+/).map(s => s.trim()).filter(Boolean).map(s => {
-        // 尝试提取纯域名（去掉协议和路径）
-        try { return new URL(s.startsWith('http') ? s : 'https://' + s).hostname; }
-        catch { return s.replace(/^https?:\/\//, '').split('/')[0]; }
-      });
+      const newDomains = text.split(/[\n\r]+/).map(s => normalizeWhitelistEntry(s)).filter(Boolean);
       const editor = document.getElementById('whitelist-editor');
       if (!editor) return;
-      const existing = editor.value.split(/[\n\r]+/).map(s => s.trim()).filter(Boolean);
+      const existing = editor.value.split(/[\n\r]+/).map(s => normalizeWhitelistEntry(s)).filter(Boolean);
       const merged = [...new Set([...existing, ...newDomains])];
       editor.value = merged.join('\n');
       this._updateWhitelistCount(merged.length);
