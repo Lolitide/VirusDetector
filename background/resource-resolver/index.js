@@ -29,8 +29,12 @@ import {
   MAX_DEPTH, MAX_TOTAL_RESOURCES, MAX_TXT_SIZE,
   PER_RESOURCE_TIMEOUT, TOTAL_TIMEOUT,
   FETCH_INTERMEDIATE_PAGES, MAX_INTERMEDIATE_PAGES, MAX_INTERMEDIATE_PAGE_SIZE,
-  ENABLED_RESOLVERS, RESOURCE_TYPES, SOURCE_TYPES
+  ENABLED_RESOLVERS, RESOURCE_TYPES, SOURCE_TYPES,
+  ARCHIVE_EXTENSIONS, EXECUTABLE_EXTENSIONS, TEXT_EXTENSIONS, JSON_EXTENSIONS
 } from './config.js';
+
+/** 全部危险扩展名并集（归档 + 可执行，用于重定向目标判定） */
+const ALL_DANGEROUS_EXTS = [...ARCHIVE_EXTENSIONS, ...EXECUTABLE_EXTENSIONS];
 
 // ==================== 解析器注册表 ====================
 
@@ -174,10 +178,8 @@ export class ResourceResolver {
       maxIntermediatePageSize: options.maxIntermediatePageSize || MAX_INTERMEDIATE_PAGE_SIZE
     };
 
-    // 创建 ResourceGraph
     const graph = new ResourceGraph(pageUrl);
 
-    // 创建根节点（页面本身）
     const rootNode = createResourceNode(
       RESOURCE_TYPES.HTML,
       pageUrl,
@@ -191,11 +193,9 @@ export class ResourceResolver {
     );
     graph.addNode(rootNode);
 
-    // 访问集合
     const visited = new Set();
     visited.add(normalizeUrlKey(pageUrl));
 
-    // 解析上下文
     const context = {
       graph,
       config,
@@ -206,13 +206,11 @@ export class ResourceResolver {
       pageDomain: graph.pageDomain
     };
 
-    // BFS 队列：[{ url, parentUrl, depth, type, sourceType, metadata }]
     const queue = [];
 
     // 将 Content Script 采集的资源数据作为初始种子加入队列
     _enqueueInitialData(queue, initialData, pageUrl, visited, graph);
 
-    // BFS 主循环
     while (queue.length > 0 && graph.totalResources < config.maxTotalResources) {
       // 总超时检查
       if (Date.now() - startTime > config.totalTimeout) {
@@ -227,13 +225,11 @@ export class ResourceResolver {
       if (visited.has(normalizedUrl)) continue;
       visited.add(normalizedUrl);
 
-      // 深度限制
       if (current.depth > config.maxDepth) continue;
 
       // 数量限制
       if (graph.totalResources >= config.maxTotalResources) break;
 
-      // 创建节点
       const node = createResourceNode(
         current.type || RESOURCE_TYPES.UNKNOWN,
         current.url,
@@ -244,15 +240,12 @@ export class ResourceResolver {
       );
       graph.addNode(node);
 
-      // 添加父子关系
       if (current.parentUrl) {
         graph.addEdge(current.parentUrl, current.url);
       }
 
-      // 查找匹配的解析器
       const children = await _resolveWithResolvers(node, context);
 
-      // 将子节点加入队列
       for (const child of children) {
         const childNormalized = normalizeUrlKey(child.url);
         if (!visited.has(childNormalized)) {
@@ -499,10 +492,9 @@ async function _fetchIntermediatePages(graph, intermediatePages, pageUrl, pageDo
           graph.addRedirect(targetUrl, finalUrl, headResp.status);
         }
 
-        // 如果最终 URL 是归档 → 直接记录
+        // 如果最终 URL 是归档 → 直接记录（扩展名并集来自 config.js）
         const finalExt = _extractExt(finalUrl);
-        const archExts = ['.zip', '.rar', '.7z', '.tar', '.gz', '.tgz', '.bz2', '.xz', '.iso', '.cab', '.exe', '.msi', '.apk'];
-        if (archExts.some(e => finalExt === e || finalExt.endsWith(e))) {
+        if (ALL_DANGEROUS_EXTS.some(e => finalExt === e || finalExt.endsWith(e))) {
           const node = createResourceNode(RESOURCE_TYPES.ARCHIVE, finalUrl, pageUrl, 1, SOURCE_TYPES.REDIRECT, {
             ext: finalExt,
             isCrossDomain: _isCrossDomain(finalUrl, pageUrl),
@@ -522,11 +514,10 @@ async function _fetchIntermediatePages(graph, intermediatePages, pageUrl, pageDo
         const html = await fetchResult.text();
 
         if (html && html.length > 0) {
-          // 正则提取所有归档 URL
-          const { ARCHIVE_URL_PATTERN: urlPattern } = await import('./config.js');
-          urlPattern.lastIndex = 0;
+          // 正则提取所有归档 URL（config.js 已在模块顶层静态导入）
+          ARCHIVE_URL_PATTERN.lastIndex = 0;
           let match;
-          while ((match = urlPattern.exec(html)) !== null) {
+          while ((match = ARCHIVE_URL_PATTERN.exec(html)) !== null) {
             try {
               const absoluteUrl = new URL(match[0], finalUrl).href;
               if (!visited.has(normalizeUrlKey(absoluteUrl)) &&
@@ -604,13 +595,11 @@ function _isCrossDomain(url1, url2) {
 
 function _classifyByUrl(url, tagName) {
   const ext = _extractExt(url);
-  const ARCHIVE_EXTS = ['.zip', '.rar', '.7z', '.tar', '.gz', '.tar.gz', '.tgz', '.bz2', '.xz', '.z', '.iso', '.cab', '.arj', '.lzh', '.tar.bz2', '.tar.xz', '.gz2', '.zst', '.img', '.dmg'];
-  const EXECUTABLE_EXTS = ['.exe', '.msi', '.apk', '.pkg', '.appx', '.deb', '.rpm', '.bat', '.cmd', '.ps1', '.vbs', '.scr', '.jar', '.bin', '.run', '.sh', '.dmg'];
-
-  if (ARCHIVE_EXTS.some(e => ext === e || ext.endsWith(e))) return RESOURCE_TYPES.ARCHIVE;
-  if (EXECUTABLE_EXTS.some(e => ext === e || ext.endsWith(e))) return RESOURCE_TYPES.EXECUTABLE;
-  if (/\.(txt|text|log|csv)$/i.test(url)) return RESOURCE_TYPES.TXT;
-  if (/\.json$/i.test(url)) return RESOURCE_TYPES.JSON;
+  // 扩展名列表来自 config.js（派生自 constants.js 并集）
+  if (ARCHIVE_EXTENSIONS.some(e => ext === e || ext.endsWith(e))) return RESOURCE_TYPES.ARCHIVE;
+  if (EXECUTABLE_EXTENSIONS.some(e => ext === e || ext.endsWith(e))) return RESOURCE_TYPES.EXECUTABLE;
+  if (TEXT_EXTENSIONS.some(e => url.toLowerCase().endsWith(e))) return RESOURCE_TYPES.TXT;
+  if (JSON_EXTENSIONS.some(e => url.toLowerCase().endsWith(e))) return RESOURCE_TYPES.JSON;
   if (tagName === 'iframe') return RESOURCE_TYPES.IFRAME;
   return RESOURCE_TYPES.UNKNOWN;
 }

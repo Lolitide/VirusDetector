@@ -1,8 +1,13 @@
+/**
+ * 上报隐私测试：断言 service-worker 上报载荷不含 pageUrl 等敏感 URL 信息，
+ * buildBody 生成的 issue body 仅保留安全的规则细节（源码切片 + 直接调用断言）。
+ */
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import { buildBody } from '../worker/report-issue.js';
+import { VERSION } from '../utils/constants.js';
 
 const serviceWorker = readFileSync(new URL('../background/service-worker.js', import.meta.url), 'utf8');
 
@@ -32,7 +37,7 @@ test('public issue body retains safe rule details and ignores raw URL details', 
     reportType: 'false_positive',
     domain: 'example.com',
     score: 5,
-    version: '2.5.1',
+    version: VERSION,
     timestamp: Date.UTC(2026, 6, 23),
     url: sensitiveUrl,
     ruleResults: {

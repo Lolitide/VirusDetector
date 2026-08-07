@@ -1,66 +1,76 @@
 /**
  * Virus Detector — Resource Resolver 配置常量
  *
- * 集中管理递归深度、资源数量、大小、超时等所有限制参数。
- * 部分常量也在 utils/constants.js 中引用，便于评分引擎和设置页使用。
+ * 数值类限制参数与 utils/constants.js 单一真源（RESOLVER_* 常量），
+ * 本文件以别名形式 re-export 保持解析器层导入名不变；
+ * 解析器注册表、URL 提取正则、资源类型枚举等 resolver 专属配置保留在本文件。
+ *
+ * ⚠️ 共享正则注意：本文件导出的 LOCATION_PATTERNS / FETCH_PATTERNS / URL_PATTERN 等
+ * 均带 g 标志（正则对象有 lastIndex 状态），调用方必须在 exec 循环前重置
+ * `pattern.lastIndex = 0`，否则会跳跃匹配（现有调用方均已合规，勿回退）。
  *
  * @module resource-resolver/config
  */
 
-// ==================== 递归控制 ====================
+import {
+  RESOLVER_MAX_DEPTH, RESOLVER_MAX_TOTAL_RESOURCES, RESOLVER_MAX_TXT_SIZE,
+  RESOLVER_MAX_JSON_SIZE, RESOLVER_MAX_INLINE_SCRIPT_LENGTH, RESOLVER_MAX_PAGE_TEXT_LENGTH,
+  RESOLVER_PER_RESOURCE_TIMEOUT, RESOLVER_TOTAL_TIMEOUT,
+  RESOLVER_FETCH_INTERMEDIATE_PAGES_DEFAULT, RESOLVER_MAX_INTERMEDIATE_PAGES,
+  RESOLVER_MAX_INTERMEDIATE_PAGE_SIZE, RESOLVER_INTERMEDIATE_PAGE_TIMEOUT,
+  RESOLVER_TEXT_EXTENSIONS, RESOLVER_JSON_EXTENSIONS,
+  ARCHIVE_EXTENSIONS, EXECUTABLE_EXTENSIONS, INTERMEDIATE_PAGE_KEYWORDS,
+  MAX_REDIRECTS, MIN_SCRIPT_LENGTH, SNIPPET_PADDING,
+  JSON_MAX_DEPTH, JSON_MAX_KEYS, JSON_MIN_URL_LENGTH,
+  buildArchiveUrlPattern
+} from '../../utils/constants.js';
+
+// ==================== 递归控制（别名，值来自 constants.js） ====================
 
 /** 最大递归深度（页面本身 depth=0，最多向下 3 层） */
-export const MAX_DEPTH = 3;
+export const MAX_DEPTH = RESOLVER_MAX_DEPTH;
 
 /** 整个解析过程最多处理的资源数（含页面本身） */
-export const MAX_TOTAL_RESOURCES = 20;
+export const MAX_TOTAL_RESOURCES = RESOLVER_MAX_TOTAL_RESOURCES;
 
-// ==================== 大小限制 ====================
+// ==================== 大小限制（别名，值来自 constants.js） ====================
 
 /** TXT 文件最大下载大小（字节），超过立即停止解析 */
-export const MAX_TXT_SIZE = 256 * 1024; // 256KB
+export const MAX_TXT_SIZE = RESOLVER_MAX_TXT_SIZE; // 256KB
 
 /** JSON 文件最大下载大小（字节） */
-export const MAX_JSON_SIZE = 128 * 1024; // 128KB
+export const MAX_JSON_SIZE = RESOLVER_MAX_JSON_SIZE; // 128KB
 
 /** Inline Script 单个最大分析长度（字符），超过截断 */
-export const MAX_INLINE_SCRIPT_LENGTH = 32 * 1024; // 32KB
+export const MAX_INLINE_SCRIPT_LENGTH = RESOLVER_MAX_INLINE_SCRIPT_LENGTH; // 32KB
 
 /** 页面文本最大采集长度（字符），用于 URL 正则提取 */
-export const MAX_PAGE_TEXT_LENGTH = 64 * 1024; // 64KB
+export const MAX_PAGE_TEXT_LENGTH = RESOLVER_MAX_PAGE_TEXT_LENGTH; // 64KB
 
-// ==================== 超时控制 ====================
+// ==================== 超时控制（别名，值来自 constants.js） ====================
 
 /** 单个资源 fetch 超时（毫秒） */
-export const PER_RESOURCE_TIMEOUT = 2000;
+export const PER_RESOURCE_TIMEOUT = RESOLVER_PER_RESOURCE_TIMEOUT;
 
 /** 整个 Resolver 总超时（毫秒），超时后立即返回已构建的 Graph */
-export const TOTAL_TIMEOUT = 5000;
+export const TOTAL_TIMEOUT = RESOLVER_TOTAL_TIMEOUT;
 
-// ==================== 中间页抓取配置 ====================
+// ==================== 中间页抓取配置（别名，值来自 constants.js） ====================
 
 /** 是否启用中间 HTML 下载页抓取（默认关闭，可通过设置开启） */
-export const FETCH_INTERMEDIATE_PAGES = false;
+export const FETCH_INTERMEDIATE_PAGES = RESOLVER_FETCH_INTERMEDIATE_PAGES_DEFAULT;
 
 /** 最大抓取的中间页数量 */
-export const MAX_INTERMEDIATE_PAGES = 3;
+export const MAX_INTERMEDIATE_PAGES = RESOLVER_MAX_INTERMEDIATE_PAGES;
 
 /** 中间页 HTML 最大下载大小（字节） */
-export const MAX_INTERMEDIATE_PAGE_SIZE = 128 * 1024; // 128KB
+export const MAX_INTERMEDIATE_PAGE_SIZE = RESOLVER_MAX_INTERMEDIATE_PAGE_SIZE; // 128KB
 
 /** 中间页抓取超时（毫秒） */
-export const INTERMEDIATE_PAGE_TIMEOUT = 3000;
+export const INTERMEDIATE_PAGE_TIMEOUT = RESOLVER_INTERMEDIATE_PAGE_TIMEOUT;
 
-/** 下载中间页关键词：链接文本匹配这些词时认为是可疑中间页 */
-export const INTERMEDIATE_PAGE_KEYWORDS = [
-  '下载', 'download', '下載', '立即下载', '免费下载', '高速下载',
-  '安全下载', '点击下载', '直接下载', '本地下载', '官方下载',
-  'download now', 'free download', '立即安装', '一键安装',
-  '安装包', 'setup', 'install', 'get started', 'down',
-  'dl', 'get', 'app', 'client', 'file', '链接', 'link',
-  '百度网盘', '蓝奏云', '天翼云', '123云盘', '阿里云盘',
-  '迅雷', 'bt', '磁力', 'magnet'
-];
+/** 下载中间页关键词（= constants.js INTERMEDIATE_PAGE_KEYWORDS 并集） */
+export { INTERMEDIATE_PAGE_KEYWORDS };
 
 // ==================== 解析器开关 ====================
 
@@ -80,54 +90,39 @@ export const DISABLED_RESOLVERS = [
   'ExternalScriptResolver'
 ];
 
-// ==================== 文件类型定义 ====================
+// ==================== 文件类型定义（并集，值来自 constants.js） ====================
 
 /**
- * 压缩包 / 镜像文件扩展名（与 utils/constants.js ARCHIVE_EXTENSIONS 保持一致）
+ * 压缩包 / 镜像文件扩展名（= constants.js ARCHIVE_EXTENSIONS 并集，含 .img/.dmg）
  * 这些文件被 Rule2 重点检测。
  */
-export const ARCHIVE_EXTENSIONS = [
-  '.zip', '.rar', '.7z', '.tar', '.gz', '.tar.gz', '.tgz',
-  '.bz2', '.xz', '.z', '.iso', '.cab', '.arj', '.lzh',
-  '.tar.bz2', '.tar.xz', '.gz2', '.zst', '.img', '.dmg'
-];
+export { ARCHIVE_EXTENSIONS };
 
 /**
  * 可执行程序扩展名（受 detectNonArchiveFiles 开关控制）
  */
-export const EXECUTABLE_EXTENSIONS = [
-  '.exe', '.msi', '.apk', '.pkg', '.appx', '.deb', '.rpm',
-  '.bat', '.cmd', '.ps1', '.vbs', '.scr', '.jar',
-  '.bin', '.run', '.sh', '.dmg'
-];
+export { EXECUTABLE_EXTENSIONS };
 
 /**
  * 文本类资源扩展名（会 fetch 内容进行解析）
  */
-export const TEXT_EXTENSIONS = ['.txt', '.text', '.log', '.csv'];
+export const TEXT_EXTENSIONS = RESOLVER_TEXT_EXTENSIONS;
 
 /**
  * JSON 资源扩展名
  */
-export const JSON_EXTENSIONS = ['.json'];
+export const JSON_EXTENSIONS = RESOLVER_JSON_EXTENSIONS;
 
 // ==================== URL 提取正则 ====================
 
-/** 通用 URL 提取正则（从文本中提取 http/https URL） */
+/** 通用 URL 提取正则（从文本中提取 http/https URL）。g 标志，调用方需重置 lastIndex */
 export const URL_PATTERN = /https?:\/\/[^\s<>"'`{}[\]|\\^`一-鿿]+/gi;
 
-/** 归档文件 URL 提取正则（专门匹配压缩包/可执行文件 URL） */
-export const ARCHIVE_URL_PATTERN = (() => {
-  const exts = [...ARCHIVE_EXTENSIONS, ...EXECUTABLE_EXTENSIONS]
-    .map(e => e.replace(/\./g, '\\.'))
-    .join('|');
-  return new RegExp(
-    `https?:\/\/[^\\s<>"'\`{}\\[\\]|\\\\^\`]+\.(${exts})(\\?[^\\s<>"'\`{}\\[\\]|\\\\^\`]*)?`,
-    'gi'
-  );
-})();
+/** 归档/可执行文件 URL 提取正则（由 constants.js buildArchiveUrlPattern 生成，后缀边界锚定） */
+export const ARCHIVE_URL_PATTERN = buildArchiveUrlPattern([...ARCHIVE_EXTENSIONS, ...EXECUTABLE_EXTENSIONS]);
 
 // ==================== Inline Script 分析正则 ====================
+// ⚠️ 以下正则均带 g 标志（共享可变 lastIndex），exec 循环前必须重置 lastIndex = 0
 
 /** location 赋值模式 */
 export const LOCATION_PATTERNS = [
@@ -158,8 +153,18 @@ export const DOWNLOAD_ATTR_PATTERN = /download\s*=\s*["'`]([^"'`]*)["'`]/gi;
 /** new URL() 构造 */
 export const NEW_URL_PATTERN = /new\s+URL\s*\(\s*["'`]([^"'`]+)["'`]/gi;
 
-/** 字符串字面量中的 URL（含关键扩展名） */
-export const STRING_URL_PATTERN = /["'`](https?:\/\/[^"'`]*\.(zip|rar|7z|tar|gz|tgz|bz2|xz|iso|cab|exe|msi|apk|dmg|pkg|bat|cmd|ps1|vbs|scr|jar|bin|run|sh)[^"'`]*)["'`]/gi;
+/**
+ * 字符串字面量中的 URL（含关键扩展名）。
+ * 扩展名由 constants.js ARCHIVE_EXTENSIONS ∪ EXECUTABLE_EXTENSIONS 并集生成（36 项），
+ * 后缀边界靠字符串字面量引号收尾锚定。
+ */
+export const STRING_URL_PATTERN = (() => {
+  // 扩展名前置反斜杠转义（'\\' 标准转义）；正则源码中 / 无需转义
+  const exts = [...ARCHIVE_EXTENSIONS, ...EXECUTABLE_EXTENSIONS]
+    .map((e) => '\\' + e)
+    .join('|');
+  return new RegExp(`["'\`](https?://[^"'\`]*(${exts})[^"'\`]*)["'\`]`, 'gi');
+})();
 
 // ==================== 资源类型枚举 ====================
 
@@ -196,3 +201,23 @@ export const SOURCE_TYPES = {
   PAGE_ROOT: 'page_root',
   STRING_LITERAL: 'string_literal'
 };
+
+// ==================== 解析限额（别名，值来自 constants.js） ====================
+
+/** HTTP 30x 重定向最大跟随次数 */
+export { MAX_REDIRECTS };
+
+/** Inline/外部脚本内容最短长度（低于此值不做静态分析） */
+export { MIN_SCRIPT_LENGTH };
+
+/** 匹配文本片段前后保留的上下文字符数 */
+export { SNIPPET_PADDING };
+
+/** JSON 内容递归解析深度上限 */
+export { JSON_MAX_DEPTH };
+
+/** JSON 内容单对象最多遍历 key 数 */
+export { JSON_MAX_KEYS };
+
+/** 字符串字面量中 URL 的最短长度（低于此值视为噪音） */
+export { JSON_MIN_URL_LENGTH };

@@ -7,6 +7,7 @@
  * @module resource-resolver/resource-graph
  */
 
+import { ARCHIVE_EXTENSIONS, EXECUTABLE_EXTENSIONS } from './config.js';
 
 // ==================== ResourceNode ====================
 
@@ -104,7 +105,6 @@ export class ResourceGraph {
     this.totalResources = this.nodes.size;
     this.maxDepth = Math.max(this.maxDepth, node.depth);
 
-    // 自动分类索引
     const ext = (node.metadata.ext || '').toLowerCase();
     const { ARCHIVE_EXTENSIONS, EXECUTABLE_EXTENSIONS } = requireConfig();
 
@@ -115,7 +115,6 @@ export class ResourceGraph {
       this.discoveredExecutables.push(node);
     }
 
-    // 跟踪 TXT 深度
     if (node.type === 'txt') {
       this.txtDepth = Math.max(this.txtDepth, node.depth);
     }
@@ -224,7 +223,6 @@ export class ResourceGraph {
       }
     }
 
-    // 恢复索引
     if (json.discoveredArchives) {
       for (const n of json.discoveredArchives) {
         const existing = graph.nodes.get(normalizeUrl(n.url));
@@ -263,7 +261,7 @@ export class ResourceGraph {
 // ==================== 内部工具函数 ====================
 
 /**
- * URL 归一化：去除 hash 和尾部斜杠，统一小写
+ * URL 归一化：去除 hash（URL 对象 href 序列化后的标准形式，其余保持不变）
  * @param {string} url
  * @returns {string}
  */
@@ -272,11 +270,7 @@ function normalizeUrl(url) {
   try {
     const u = new URL(url);
     u.hash = '';
-    let result = u.href;
-    if (result.endsWith('/') && !u.pathname.endsWith('/')) {
-      // pathname 本身不以 / 结尾但 href 以 / 结尾 → 去掉尾部斜杠
-    }
-    return result;
+    return u.href;
   } catch (e) {
     return url.replace(/#.*$/, '');
   }
@@ -315,23 +309,14 @@ function extractExtension(url) {
 }
 
 /**
- * 懒加载 config 模块，避免循环依赖
+ * 懒加载 config 模块（config.js 不依赖本文件，无循环依赖）
  */
 let _config = null;
 function requireConfig() {
   if (!_config) {
-    // 使用动态 import 的同构替代：直接内联需要的常量
     _config = {
-      ARCHIVE_EXTENSIONS: [
-        '.zip', '.rar', '.7z', '.tar', '.gz', '.tar.gz', '.tgz',
-        '.bz2', '.xz', '.z', '.iso', '.cab', '.arj', '.lzh',
-        '.tar.bz2', '.tar.xz', '.gz2', '.zst', '.img', '.dmg'
-      ],
-      EXECUTABLE_EXTENSIONS: [
-        '.exe', '.msi', '.apk', '.pkg', '.appx', '.deb', '.rpm',
-        '.bat', '.cmd', '.ps1', '.vbs', '.scr', '.jar',
-        '.bin', '.run', '.sh', '.dmg'
-      ]
+      ARCHIVE_EXTENSIONS,
+      EXECUTABLE_EXTENSIONS
     };
   }
   return _config;

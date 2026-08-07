@@ -1,9 +1,9 @@
 /**
- * Virus Detector — 外部 Script 解析器（第二阶段预留）
+ * Virus Detector — 外部 Script 解析器（预留，默认关闭）
  *
  * 解析外部 JS 文件内容，提取 URL 模式。
- * 默认关闭：fetch 所有外部 JS 代价过高，误报风险大。
- * 仅在用户通过设置显式启用后生效。
+ * 默认关闭：fetch 所有外部 JS 代价过高，误报风险大；
+ * 当前未注册进 ENABLED_RESOLVERS，canHandle 恒返回 false。
  *
  * @module resource-resolver/resolvers/external-script-resolver
  */
@@ -12,14 +12,12 @@ import { BaseResolver } from './base-resolver.js';
 import {
   RESOURCE_TYPES, SOURCE_TYPES,
   LOCATION_PATTERNS, WINDOW_OPEN_PATTERN, FETCH_PATTERNS,
-  STRING_URL_PATTERN, URL_PATTERN
+  STRING_URL_PATTERN, URL_PATTERN, MIN_SCRIPT_LENGTH, MAX_JSON_SIZE
 } from '../config.js';
 
 export class ExternalScriptResolver extends BaseResolver {
   canHandle(node) {
-    // 默认返回 false（由主调度器通过 enabledResolvers 控制）
-    // 如果被启用：处理外部脚本
-    return false;
+    return false;   // 未启用：不处理任何节点（注册进 ENABLED_RESOLVERS 后方可生效）
   }
 
   async resolve(node, context) {
@@ -29,16 +27,16 @@ export class ExternalScriptResolver extends BaseResolver {
       return discovered;
     }
 
-    // 获取外部 JS 内容
+    // 获取外部 JS 内容（大小限制 = config.js MAX_JSON_SIZE，语义独立于 JSON 解析）
     let content;
     try {
-      content = await context.fetchFn(node.url, { sizeLimit: 128 * 1024 }); // 128KB
+      content = await context.fetchFn(node.url, { sizeLimit: MAX_JSON_SIZE });
     } catch (e) {
       console.debug('[ExternalScriptResolver] Fetch 失败:', node.url, e.message);
       return discovered;
     }
 
-    if (!content || content.length < 3) return discovered;
+    if (!content || content.length < MIN_SCRIPT_LENGTH) return discovered;
 
     const pageUrl = node.parentUrl || context.pageUrl;
     const foundUrls = new Set();

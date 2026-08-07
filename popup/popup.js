@@ -1,11 +1,32 @@
 /**
- * 银狐木马检测 - Popup UI
- * SVG图标系统 + 优化排版 + 白名单极简模式
+ * Virus Detector — Popup UI（工具栏弹窗控制器）
+ *
+ * 用途：展示当前标签页的检测结果（安全/警告/黑名单/白名单面板与规则明细），
+ * 提供白名单/黑名单管理、误报与钓鱼上报、重新检测、打开设置页等操作。
+ *
+ * 前置条件：
+ *   - 依赖 popup.html 的固定元素 id（loading、safe-panel、warning-panel、score-value 等）
+ *   - 依赖 utils/constants.js 的常量与阈值，经 chrome.runtime 与 Service Worker 交互
+ *
+ * 输入与输出：
+ *   - 输入：打开时经 GET_TAB_STATE 向 SW 请求当前标签页分析状态；未分析时向活动标签页
+ *     内容脚本发送 REQUEST_PAGE_TEXT 触发重采，等待 IDLE_TIMEOUT_MS 后重取
+ *   - 输出：按分数阈值分派渲染对应面板；用户操作经 ADD/REMOVE_FROM_WHITELIST、
+ *     ADD/REMOVE_SITE_BLACKLIST、SUBMIT_REPORT 等消息回传 SW 执行
+ *
+ * 算法说明：
+ *   - 渲染流程：GET_TAB_STATE →（未分析则重采重试）→ 按 SCORE_THRESHOLD /
+ *     DOWNLOAD_CONFIRM_THRESHOLD 选择面板；黑名单与白名单互斥，黑名单优先
+ *
+ * @module popup
  */
+import {
+  SCORE_THRESHOLD, DOWNLOAD_CONFIRM_THRESHOLD, MSG_TYPES, STORAGE_KEYS,
+  REPORT_TYPES, UI_KEYS, GITHUB_REPO_PAGE, IDLE_TIMEOUT_MS, PHISH_CONFIRM_TIMEOUT_MS
+} from '../utils/constants.js';
+
 (function () {
   'use strict';
-
-  const SCORE_THRESHOLD = 100;
 
   const $ = (id) => document.getElementById(id);
 
@@ -48,7 +69,6 @@
     refreshBtn: $('refresh-btn'),
     whitelistBtn: $('whitelist-btn'),
     blacklistBtn: $('blacklist-btn'),
-    // 刻度尺相关元素
     safeScoreIcon: $('safe-score-icon'),
     safeGaugeIndicator: $('safe-gauge-indicator'),
     warningScoreIcon: $('warning-score-icon'),
@@ -92,17 +112,19 @@
 
   /**
    * 计算刻度尺指示器的水平位置百分比
-   * 分段线性映射: 0→0%, 80→50%(中间), 100→75%(右四等分), 200→100%(最右)
+   * 分段线性映射: 0→0%, 确认阈值→50%(中间), 警告阈值→75%(右四等分), 200→100%(最右)
    * 评分 >200 视为 200（封顶）
+   * 注：80/100 边界取 constants.js 默认阈值常量（UI 刻度不跟随用户自定义阈值）
    */
+  const GAUGE_MAX_SCORE = 200;
   function calcGaugePosition(score) {
-    const clamped = Math.max(0, Math.min(200, score));
-    if (clamped <= 80) {
-      return (clamped / 80) * 50;                // 0% → 50%
-    } else if (clamped <= 100) {
-      return 50 + ((clamped - 80) / 20) * 25;     // 50% → 75%
+    const clamped = Math.max(0, Math.min(GAUGE_MAX_SCORE, score));
+    if (clamped <= DOWNLOAD_CONFIRM_THRESHOLD) {
+      return (clamped / DOWNLOAD_CONFIRM_THRESHOLD) * 50;                     // 0% → 50%
+    } else if (clamped <= SCORE_THRESHOLD) {
+      return 50 + ((clamped - DOWNLOAD_CONFIRM_THRESHOLD) / (SCORE_THRESHOLD - DOWNLOAD_CONFIRM_THRESHOLD)) * 25; // 50% → 75%
     } else {
-      return 75 + ((clamped - 100) / 100) * 25;    // 75% → 100%
+      return 75 + ((clamped - SCORE_THRESHOLD) / (GAUGE_MAX_SCORE - SCORE_THRESHOLD)) * 25;  // 75% → 100%
     }
   }
 
@@ -111,8 +133,8 @@
    * @returns {'green'|'yellow'|'red'}
    */
   function getScoreColorZone(score) {
-    if (score < 80) return 'green';
-    if (score < 100) return 'yellow';
+    if (score < DOWNLOAD_CONFIRM_THRESHOLD) return 'green';
+    if (score < SCORE_THRESHOLD) return 'yellow';
     return 'red';
   }
 
@@ -143,13 +165,11 @@
   function updateScoreDisplay(scoreValueEl, gaugeIndEl, scoreIconEl, score, isWarning) {
     const zone = getScoreColorZone(score);
 
-    // 1. 更新评分数字颜色
     scoreValueEl.classList.remove('safe-color', 'warn-color', 'danger-color');
     scoreValueEl.classList.add(
       zone === 'green' ? 'safe-color' : zone === 'yellow' ? 'warn-color' : 'danger-color'
     );
 
-    // 2. 更新图标颜色
     if (scoreIconEl) {
       const iconColorMap = { green: '#4CAF50', yellow: '#FF9800', red: '#F44336' };
       const color = iconColorMap[zone];
@@ -160,11 +180,9 @@
       }
     }
 
-    // 3. 更新刻度尺指示器位置
     const position = calcGaugePosition(score);
     gaugeIndEl.style.left = position + '%';
 
-    // 4. 更新刻度尺指示器颜色
     const arrow = gaugeIndEl.querySelector('.gauge-arrow');
     if (arrow) {
       arrow.classList.remove('arrow-green', 'arrow-yellow', 'arrow-red');
@@ -205,7 +223,6 @@
     els.header.className = 'header-safe';
     var score = data.score || 0;
     els.scoreValue.textContent = score;
-    // 动态更新评分卡片（颜色、图标、刻度尺指示器）
     updateScoreDisplay(els.scoreValue, els.safeGaugeIndicator, els.safeScoreIcon, score, false);
     if (els.currentDomain) els.currentDomain.textContent = data.domain || '';
   }
@@ -243,7 +260,6 @@
     els.header.className = 'header-danger';
     var score = data.score || 0;
     els.warningScoreValue.textContent = score;
-    // 动态更新评分卡片（颜色、图标、刻度尺指示器）
     updateScoreDisplay(els.warningScoreValue, els.warningGaugeIndicator, els.warningScoreIcon, score, true);
     els.warningStatusText.textContent = '危险警告';
     if (els.warningDomain) els.warningDomain.textContent = data.domain || '';
@@ -302,14 +318,12 @@
 
       // —— ICP 备案号核验状态与查询链接 ——
       if (key === 'rule3') {
-        // 移除旧的核验元素
         const oldBadge = el.querySelector('.icp-verify-badge');
         const oldLink = el.querySelector('.icp-query-link');
         if (oldBadge) oldBadge.remove();
         if (oldLink) oldLink.remove();
 
         if (rule && rule.icpVerified && rule.icpNumbers && rule.icpNumbers.length > 0) {
-          // 已核验 → 显示工信部查询链接
           textEl.textContent = `ICP备案: 检测到 (${rule.icpNumbers[0]})`;
           const linkEl = document.createElement('a');
           linkEl.className = 'icp-query-link';
@@ -319,13 +333,11 @@
           linkEl.textContent = '工信部查询 ›';
           el.appendChild(linkEl);
         } else if (rule && rule.icpBlacklisted) {
-          // 备案号疑似虚假
           const badge = document.createElement('span');
           badge.className = 'icp-verify-badge badge-fake';
           badge.textContent = '虚假备案';
           el.appendChild(badge);
         } else if (rule && rule.icpFound && !rule.icpVerified) {
-          // 已找到但未核验
           const badge = document.createElement('span');
           badge.className = 'icp-verify-badge badge-unverified';
           badge.textContent = '未核验';
@@ -364,7 +376,7 @@
 
   async function fetchState() {
     try {
-      const resp = await chrome.runtime.sendMessage({ type: 'GET_TAB_STATE', payload: {} });
+      const resp = await chrome.runtime.sendMessage({ type: MSG_TYPES.GET_TAB_STATE, payload: {} });
       return (resp && resp.success) ? resp.data : null;
     } catch (e) { return null; }
   }
@@ -373,9 +385,10 @@
     try {
       const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
       if (tabs.length > 0) {
-        await chrome.tabs.sendMessage(tabs[0].id, { type: 'REQUEST_PAGE_TEXT', payload: {} });
+        await chrome.tabs.sendMessage(tabs[0].id, { type: MSG_TYPES.REQUEST_PAGE_TEXT, payload: {} });
       }
-      await new Promise(r => setTimeout(r, 1500));
+      // 等待内容脚本重采返回（与 content-script 空闲调度同值）
+      await new Promise(r => setTimeout(r, IDLE_TIMEOUT_MS));
     } catch (e) { /* content script may not be ready */ }
   }
 
@@ -412,7 +425,7 @@
     if (data.isSiteBlacklisted && data.isWhitelisted) {
       // 异步修复（fire-and-forget），UI 立即按黑名单处理
       chrome.runtime.sendMessage({
-        type: 'REMOVE_FROM_WHITELIST',
+        type: MSG_TYPES.REMOVE_FROM_WHITELIST,
         payload: { url: data.url || '' }
       }).catch(() => {});
       data.isWhitelisted = false;
@@ -460,7 +473,6 @@
     els.refreshBtn.disabled = false;
   });
 
-  // 检测详情折叠/展开
   const detailsToggle = document.getElementById('details-toggle');
   if (detailsToggle) {
     detailsToggle.addEventListener('click', () => {
@@ -468,7 +480,6 @@
     });
   }
 
-  // GitHub 按钮
   const githubBtn = document.getElementById('github-btn');
   if (githubBtn) {
     githubBtn.addEventListener('click', () => {
@@ -476,7 +487,6 @@
     });
   }
 
-  // 设置按钮 → 打开选项页
   const settingsBtn = document.getElementById('settings-btn');
   if (settingsBtn) {
     settingsBtn.addEventListener('click', () => {
@@ -484,15 +494,13 @@
     });
   }
 
-  // 背景容器（header 区域点击跳转 GitHub）
   const bgContainer = document.getElementById('bg-container');
   if (bgContainer) {
     bgContainer.addEventListener('click', () => {
-      chrome.tabs.create({ url: 'https://github.com/Lolitide/VirusDetector' });
+      chrome.tabs.create({ url: GITHUB_REPO_PAGE });
     });
   }
 
-  // 上报按钮：误报
   const reportFalseBtn = document.getElementById('report-false-btn');
 
   if (reportFalseBtn) {
@@ -504,8 +512,8 @@
         if (tabs.length === 0) return;
         const domain = new URL(tabs[0].url || '').hostname;
         await chrome.runtime.sendMessage({
-          type: 'SUBMIT_REPORT',
-          payload: { reportType: 'false_positive', domain, note: '' }
+          type: MSG_TYPES.SUBMIT_REPORT,
+          payload: { reportType: REPORT_TYPES.FALSE_POSITIVE, domain, note: '' }
         });
         _reportedFalse = true;
         await render();
@@ -533,19 +541,16 @@
 
   if (reportPhishBtn) {
     reportPhishBtn.addEventListener('click', async () => {
-      // 第一步：不是确认状态 → 进入确认状态
       if (!_phishConfirmPending) {
         _phishConfirmPending = true;
         if (_btnLabel(reportPhishBtn)) _btnLabel(reportPhishBtn).textContent = '确认?';
         reportPhishBtn.classList.add('active', 'confirming');
-        // 3秒后自动取消确认
         _phishConfirmTimer = setTimeout(() => {
           _cancelPhishConfirm();
-        }, 3000);
+        }, PHISH_CONFIRM_TIMEOUT_MS);
         return;
       }
 
-      // 第二步：确认状态 → 正式上报
       _cancelPhishConfirm();
       reportPhishBtn.classList.add('active');
       reportPhishBtn.disabled = true;
@@ -554,8 +559,8 @@
         if (tabs.length === 0) return;
         const domain = new URL(tabs[0].url || '').hostname;
         await chrome.runtime.sendMessage({
-          type: 'SUBMIT_REPORT',
-          payload: { reportType: 'confirmed_phish', domain, note: '' }
+          type: MSG_TYPES.SUBMIT_REPORT,
+          payload: { reportType: REPORT_TYPES.CONFIRMED_PHISH, domain, note: '' }
         });
         _reportedPhish = true;
         await render();
@@ -566,7 +571,6 @@
       }
     });
 
-    // 点击页面其他区域取消确认状态
     document.addEventListener('click', (e) => {
       if (_phishConfirmPending && !reportPhishBtn.contains(e.target)) {
         _cancelPhishConfirm();
@@ -574,7 +578,6 @@
     });
   }
 
-  // 白名单按钮
   els.whitelistBtn.addEventListener('click', async () => {
     els.whitelistBtn.classList.add('active');
     els.whitelistBtn.disabled = true;
@@ -582,27 +585,26 @@
       const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
       if (tabs.length > 0) {
         const url = tabs[0].url || '';
-        // 仅对有效的 HTTP URL 执行白名单操作
         if (url && url.startsWith('http')) {
           const checkResp = await chrome.runtime.sendMessage({
-            type: 'CHECK_WHITELIST',
+            type: MSG_TYPES.CHECK_WHITELIST,
             payload: { url }
           });
           const isCurrentlyWhitelisted = checkResp?.isWhitelisted || false;
 
           if (isCurrentlyWhitelisted) {
             await chrome.runtime.sendMessage({
-              type: 'REMOVE_FROM_WHITELIST',
+              type: MSG_TYPES.REMOVE_FROM_WHITELIST,
               payload: { url }
             });
           } else {
             // 加入白名单时同时移出黑名单（互斥）
             await chrome.runtime.sendMessage({
-              type: 'REMOVE_SITE_BLACKLIST',
+              type: MSG_TYPES.REMOVE_SITE_BLACKLIST,
               payload: { domain: new URL(url).hostname }
             });
             await chrome.runtime.sendMessage({
-              type: 'ADD_TO_WHITELIST',
+              type: MSG_TYPES.ADD_TO_WHITELIST,
               payload: { url }
             });
           }
@@ -616,7 +618,6 @@
     els.whitelistBtn.disabled = false;
   });
 
-  // 站点黑名单按钮
   els.blacklistBtn.addEventListener('click', async () => {
     els.blacklistBtn.classList.add('active');
     els.blacklistBtn.disabled = true;
@@ -624,27 +625,26 @@
       const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
       if (tabs.length > 0) {
         const url = tabs[0].url || '';
-        // 仅对有效的 HTTP URL 执行黑名单操作
         if (url && url.startsWith('http')) {
           const domain = new URL(url).hostname;
 
-          const resp = await chrome.runtime.sendMessage({ type: 'GET_SITE_BLACKLIST' });
+          const resp = await chrome.runtime.sendMessage({ type: MSG_TYPES.GET_SITE_BLACKLIST });
           const blacklist = (resp && resp.data) ? resp.data : {};
           const isCurrentlyBlacklisted = blacklist.hasOwnProperty(domain);
 
           if (isCurrentlyBlacklisted) {
             await chrome.runtime.sendMessage({
-              type: 'REMOVE_SITE_BLACKLIST',
+              type: MSG_TYPES.REMOVE_SITE_BLACKLIST,
               payload: { domain }
             });
           } else {
             // 加入黑名单时同时移出白名单（互斥）
             await chrome.runtime.sendMessage({
-              type: 'REMOVE_FROM_WHITELIST',
+              type: MSG_TYPES.REMOVE_FROM_WHITELIST,
               payload: { url }
             });
             await chrome.runtime.sendMessage({
-              type: 'ADD_SITE_BLACKLIST',
+              type: MSG_TYPES.ADD_SITE_BLACKLIST,
               payload: { domain, addedBy: 'popup' }
             });
           }
@@ -678,8 +678,9 @@
     if (!bgContainer || !tooltip) return;
 
     try {
-      const stored = await chrome.storage.local.get('updateAvailable');
-      if (stored && stored.updateAvailable) {
+      // 更新信息由 SW 写入 STORAGE_KEYS.UPDATE_INFO（含 hasUpdate 标记）
+      const stored = await chrome.storage.local.get(STORAGE_KEYS.UPDATE_INFO);
+      if (stored && stored[STORAGE_KEYS.UPDATE_INFO] && stored[STORAGE_KEYS.UPDATE_INFO].hasUpdate === true) {
         // 有新版本 → 自动展开并维持，显示"新版本!"
         bgContainer.classList.add('expanded');
         tooltip.textContent = '新版本!';
@@ -698,21 +699,20 @@
   /** 从 storage 读取主题并立即应用，auto 模式通过 matchMedia 解析 */
   async function applyTheme() {
     try {
-      const stored = await chrome.storage.local.get('global_settings');
-      const settings = stored && stored.global_settings ? stored.global_settings : {};
+      const stored = await chrome.storage.local.get(STORAGE_KEYS.GLOBAL_SETTINGS);
+      const settings = stored && stored[STORAGE_KEYS.GLOBAL_SETTINGS] ? stored[STORAGE_KEYS.GLOBAL_SETTINGS] : {};
       const theme = settings.theme || 'dark';
       const resolved = theme === 'auto'
         ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
         : theme;
       document.documentElement.setAttribute('data-theme', resolved);
       // 同步到 localStorage 以便下次加载无闪烁（存储原始值，由 theme-init.js 解析）
-      try { localStorage.setItem('vt_theme', theme); } catch (e) { }
+      try { localStorage.setItem(UI_KEYS.THEME, theme); } catch (e) { }
     } catch (e) {
       document.documentElement.setAttribute('data-theme', 'dark');
     }
   }
 
-  // 系统配色变化时，若主题为 auto 则实时切换
   window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
     applyTheme();
   });

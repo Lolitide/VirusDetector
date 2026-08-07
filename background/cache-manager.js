@@ -23,16 +23,16 @@
  *   3. 调用 remove() 方法主动删除（如移出白名单时）
  */
 
-import { STORAGE_KEYS, CACHE_TTL } from '../utils/constants.js';
+import { STORAGE_KEYS, CACHE_TTL, HOUR_MS } from '../utils/constants.js';
 
 /** 从用户设置读取缓存 TTL，回退到 CACHE_TTL */
 let _cachedTtlMs = null;
 async function _getCacheTtlMs() {
   if (_cachedTtlMs !== null) return _cachedTtlMs;
   try {
-    const r = await chrome.storage.local.get('global_settings');
-    const gs = r.global_settings || {};
-    _cachedTtlMs = (gs.cache_ttlHours > 0 ? gs.cache_ttlHours * 3600000 : CACHE_TTL);
+    const r = await chrome.storage.local.get(STORAGE_KEYS.GLOBAL_SETTINGS);
+    const gs = r[STORAGE_KEYS.GLOBAL_SETTINGS] || {};
+    _cachedTtlMs = (gs.cache_ttlHours > 0 ? gs.cache_ttlHours * HOUR_MS : CACHE_TTL);
   } catch (e) { _cachedTtlMs = CACHE_TTL; }
   return _cachedTtlMs;
 }
@@ -61,9 +61,7 @@ export class CacheManager {
 
       if (!entry) return null;
 
-      // 检查是否过期
       if (Date.now() - entry.timestamp > await _getCacheTtlMs()) {
-        // 过期删除
         await chrome.storage.local.remove(key);
         return null;
       }

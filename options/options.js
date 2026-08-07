@@ -4,24 +4,38 @@
  * 负责设置页的全部交互逻辑：加载/渲染/保存设置、基础/高级模式切换、
  * 灵敏度预设应用、导入/导出/恢复默认、Toast 通知等。
  *
+ * 前置条件：
+ *   - 依赖 utils/settings-schema.js（SETTINGS_DEFAULTS/SECTIONS/灵敏度预设/schema 迁移）与
+ *     utils/constants.js 常量；依赖 options.html 的固定元素 id 与结构，以及 localStorage
+ *     缓存的模式与分区键（UI_KEYS.ACTIVE_SECTION/MODE）
+ *
+ * 输入与输出：
+ *   - 输入：用户交互 + chrome.storage.local 中持久化的 GLOBAL_SETTINGS（保存前经
+ *     validateSetting/migrateSettings 校验与迁移）
+ *   - 输出：保存设置写回 chrome.storage.local；模式/主题切换、灵敏度预设等即时生效并
+ *     Toast 反馈；导入/导出/恢复默认同步更新存储
+ *
  * @module options
  */
 
-import { SETTINGS_DEFAULTS, SECTIONS, SENSITIVITY_PRESETS, SCHEMA_VERSION, validateSetting } from '../utils/settings-schema.js';
-import { STORAGE_KEYS, MSG_TYPES, VERSION, UPDATE_CHANNEL } from '../utils/constants.js';
+import { SETTINGS_DEFAULTS, SECTIONS, SENSITIVITY_PRESETS, SCHEMA_VERSION, validateSetting, migrateSettings } from '../utils/settings-schema.js';
+import {
+  STORAGE_KEYS, MSG_TYPES, VERSION, UPDATE_CHANNEL,
+  UI_KEYS, ADVANCED_ONLY_SECTIONS, PRESET_LEVELS,
+  TOAST_DURATION_MS, GITHUB_REPO_PAGE, GITHUB_NEW_ISSUE_URL, GITHUB_RELEASES_PAGE
+} from '../utils/constants.js';
 
+/** 设置页主控制器：持有运行时设置状态，提供加载/渲染/保存、模式切换、预设应用等交互逻辑 */
 class SettingsApp {
   constructor() {
     /** @type {Object} 当前设置（运行时状态） */
     this.settings = { ...SETTINGS_DEFAULTS };
     /** @type {string} 当前显示的 section ID */
-    this._activeSection = localStorage.getItem('vt_activeSection') || 'general';
+    this._activeSection = localStorage.getItem(UI_KEYS.ACTIVE_SECTION) || 'general';
     /** @type {'basic'|'advanced'} 当前模式 */
-    this._mode = localStorage.getItem('vt_mode') || 'basic';
-    // 基本模式下不在高级专属分区
+    this._mode = localStorage.getItem(UI_KEYS.MODE) || 'basic';
     if (this._mode === 'basic') {
-      const advancedOnly = ['thresholds', 'download', 'blacklist'];
-      if (advancedOnly.includes(this._activeSection)) {
+      if (ADVANCED_ONLY_SECTIONS.includes(this._activeSection)) {
         this._activeSection = 'general';
       }
     }
@@ -53,15 +67,16 @@ class SettingsApp {
     try {
       const r = await chrome.storage.local.get(STORAGE_KEYS.GLOBAL_SETTINGS);
       const stored = r[STORAGE_KEYS.GLOBAL_SETTINGS] || {};
-      // 合并：新键用默认值，已存储的键覆盖默认值
-      this.settings = { ...SETTINGS_DEFAULTS, ...stored };
-      // 同步 localStorage 主题镜像（确保后续页面加载无闪烁）
-      try { localStorage.setItem('vt_theme', this.settings.theme || 'dark'); } catch (e) { }
-      // Schema 迁移检测
-      if (stored._schemaVersion !== SCHEMA_VERSION) {
-        console.log('[Settings] Schema 版本变更:', stored._schemaVersion, '→', SCHEMA_VERSION);
-        // 未来在此处添加迁移逻辑
+      // Schema 迁移（如 v1→v2 修正 apihz 键名）：有变更时写回存储
+      const migrated = migrateSettings(stored);
+      if (migrated !== stored) {
+        console.log('[Settings] Schema 迁移:', stored._schemaVersion ?? 1, '→', SCHEMA_VERSION);
+        await chrome.storage.local.set({ [STORAGE_KEYS.GLOBAL_SETTINGS]: migrated });
       }
+      // 合并：新键用默认值，已存储的键覆盖默认值
+      this.settings = { ...SETTINGS_DEFAULTS, ...migrated };
+      // 同步 localStorage 主题镜像（确保后续页面加载无闪烁）
+      try { localStorage.setItem(UI_KEYS.THEME, this.settings.theme || 'dark'); } catch (e) { }
     } catch (e) {
       console.error('[Settings] 加载设置失败:', e);
       this.settings = { ...SETTINGS_DEFAULTS };
@@ -77,7 +92,7 @@ class SettingsApp {
     try {
       await chrome.storage.local.set({ [STORAGE_KEYS.GLOBAL_SETTINGS]: toStore });
       // 同步写入 localStorage 以便页面加载时无闪烁读取主题
-      try { localStorage.setItem('vt_theme', this.settings.theme || 'dark'); } catch (e) { }
+      try { localStorage.setItem(UI_KEYS.THEME, this.settings.theme || 'dark'); } catch (e) { }
       this._broadcastUpdate();
       console.log('[Settings] 已自动保存');
     } catch (e) {
@@ -125,21 +140,17 @@ class SettingsApp {
     const container = document.getElementById('section-container');
     if (!container) return;
 
-    // 高亮侧栏
     document.querySelectorAll('.nav-item').forEach(el => {
       el.classList.toggle('active', el.dataset.section === sectionId);
     });
 
-    // 自定义渲染 Section（白名单、黑名单）
     if (section.type === 'custom' && typeof this[section.renderFn] === 'function') {
       this[section.renderFn](container, section);
       return;
     }
 
-    // 关于页特殊处理
     if (section.noCard) {
       container.innerHTML = this._buildAboutHTML();
-      // 异步加载更新信息
       this._loadUpdateInfo();
       this._loadStorageStats();
       return;
@@ -155,7 +166,6 @@ class SettingsApp {
     `;
 
     for (const group of section.groups) {
-      // 过滤模式
       if (!this._isVisible(group.mode)) continue;
 
       html += `<div class="settings-card" id="card-${group.id}">
@@ -173,7 +183,6 @@ class SettingsApp {
     html += `</div>`;
     container.innerHTML = html;
 
-    // 渲染后同步控件值与当前 settings
     this._syncInputsWithSettings();
   }
 
@@ -224,8 +233,8 @@ class SettingsApp {
       }
 
       case 'preset':
-        const presetValue = value || 'medium';
-        const steps = ['low', 'medium', 'high'];
+        const presetValue = value || PRESET_LEVELS[1];   // 'medium'
+        const steps = PRESET_LEVELS.slice(0, 3);         // ['low', 'medium', 'high']
         const labels = { low: '低', medium: '中', high: '高' };
         const descs = { low: '仅高风险', medium: '均衡检测', high: '最严格' };
         return `
@@ -350,8 +359,7 @@ class SettingsApp {
   _isInputDisabled(setting) {
     if (setting.type !== 'number') return false;
     const preset = this.settings.sensitivityPreset || SETTINGS_DEFAULTS.sensitivityPreset;
-    if (preset === 'medium') return false;
-    // 检查此 key 是否在预设的 overrides 中
+    if (preset === PRESET_LEVELS[1]) return false;   // 'medium'（无覆盖，均可用）
     const overrides = SENSITIVITY_PRESETS[preset]?.overrides || {};
     return setting.key in overrides;
   }
@@ -362,7 +370,6 @@ class SettingsApp {
     const app = document.getElementById('app');
     if (!app) return;
 
-    // change 事件：输入控件
     app.addEventListener('change', (e) => {
       const target = e.target;
       if (target.matches('.setting-input')) {
@@ -370,7 +377,6 @@ class SettingsApp {
       }
     });
 
-    // click 事件委托
     app.addEventListener('click', (e) => {
       const target = e.target.closest('.nav-item, [data-section], [data-preset], #import-btn, #export-btn, #reset-btn, .mode-segment, [data-action], #modal-cancel-btn, #modal-confirm-btn, #check-update-btn, #download-update-btn, .theme-seg');
       if (!target) return;
@@ -416,7 +422,6 @@ class SettingsApp {
       }
     });
 
-    // 文件导入
     const fileInput = document.getElementById('import-file');
     if (fileInput) {
       fileInput.addEventListener('change', (e) => {
@@ -428,7 +433,7 @@ class SettingsApp {
     }
 
     // 灵敏度预设滑块拖拽
-    const STEPS = ['low', 'medium', 'high'];
+    const STEPS = PRESET_LEVELS.slice(0, 3);   // ['low', 'medium', 'high']
     let dragging = false;
 
     const getRatioFromX = (clientX) => {
@@ -500,7 +505,6 @@ class SettingsApp {
     document.addEventListener('mouseup', onDragEnd);
     document.addEventListener('touchend', onDragEnd);
 
-    // 点击轨道直接跳转
     app.addEventListener('click', (e) => {
       if (e.target.closest('.preset-thumb') || e.target.closest('.preset-label')) return;
       if (!e.target.closest('.preset-track')) return;
@@ -510,25 +514,21 @@ class SettingsApp {
       }
     });
 
-    // Drawer toggle (hamburger button)
     const drawerToggle = document.getElementById('drawer-toggle-btn');
     if (drawerToggle) {
       drawerToggle.addEventListener('click', () => this._toggleDrawer());
     }
 
-    // Drawer close button (inside sidebar)
     const drawerClose = document.getElementById('drawer-close-btn');
     if (drawerClose) {
       drawerClose.addEventListener('click', () => this._closeDrawer());
     }
 
-    // Overlay click to close drawer
     const drawerOverlay = document.getElementById('drawer-overlay');
     if (drawerOverlay) {
       drawerOverlay.addEventListener('click', () => this._closeDrawer());
     }
 
-    // Auto-close drawer when resizing from narrow to wide
     window.addEventListener('resize', () => {
       if (window.innerWidth > 720) {
         this._closeDrawer();
@@ -563,10 +563,6 @@ class SettingsApp {
       case 'text':
         value = input.value;
         break;
-      case 'theme':
-        // 主题切换由 .theme-seg 点击事件直接处理，此分支不会被触发
-        value = input.value || 'dark';
-        break;
       case 'preset':
         value = input.value;
         break;
@@ -576,17 +572,15 @@ class SettingsApp {
 
     this.settings[key] = value;
 
-    // 主题变更 → 立即生效
+    // 主题变更 → 立即生效（主题控件值由 .theme-seg 点击事件直接处理，此处仅同步设置）
     if (key === 'theme') {
       this._applyTheme();
     }
 
-    // 灵敏度预设变更
     if (key === 'sensitivityPreset') {
       this._applyPresetOverrides(value);
       // 重渲染当前 section（数值输入需要更新禁用状态），跳过淡入动画
       this._renderSection(this._activeSection, true);
-      // 滑块视觉同步（重渲染后会重建 DOM，无需额外调用）
     }
 
     this._saveSettings();
@@ -603,33 +597,16 @@ class SettingsApp {
     this._presetOverrides = { ...presetDef.overrides };
   }
 
-  /** 同步滑块视觉状态 */
-  _syncPresetSlider(value) {
-    const thumb = document.querySelector('.preset-thumb');
-    const fill = document.querySelector('.preset-fill');
-    const labels = document.querySelectorAll('.preset-label');
-    if (!thumb || !fill) return;
-    const steps = ['low', 'medium', 'high'];
-    const idx = steps.indexOf(value);
-    const pct = idx / (steps.length - 1) * 100;
-    thumb.style.left = pct + '%';
-    thumb.dataset.value = value;
-    fill.style.width = pct + '%';
-    labels.forEach(l => l.classList.toggle('active', l.dataset.step === value));
-  }
-
   // ==================== 模式切换 ====================
 
   _setMode(mode) {
     if (this._mode === mode) return;
     this._mode = mode;
-    try { localStorage.setItem('vt_mode', mode); } catch (e) { }
-    // 切回基础模式时，若当前在高级专属分区则跳转到常规
+    try { localStorage.setItem(UI_KEYS.MODE, mode); } catch (e) { }
     if (mode === 'basic') {
-      const advancedOnly = ['thresholds', 'download', 'blacklist'];
-      if (advancedOnly.includes(this._activeSection)) {
+      if (ADVANCED_ONLY_SECTIONS.includes(this._activeSection)) {
         this._activeSection = 'general';
-        try { localStorage.setItem('vt_activeSection', 'general'); } catch (e) { }
+        try { localStorage.setItem(UI_KEYS.ACTIVE_SECTION, 'general'); } catch (e) { }
       }
     }
     this._applyModeToDom();
@@ -641,7 +618,6 @@ class SettingsApp {
 
   _applyModeToDom() {
     document.documentElement.dataset.mode = this._mode;
-    // 更新分段控件高亮
     document.querySelectorAll('.mode-segment').forEach(btn => {
       btn.classList.toggle('active', btn.dataset.mode === this._mode);
     });
@@ -674,9 +650,8 @@ class SettingsApp {
   _switchSection(sectionId) {
     this._closeDrawer();
     this._activeSection = sectionId;
-    try { localStorage.setItem('vt_activeSection', sectionId); } catch (e) { }
+    try { localStorage.setItem(UI_KEYS.ACTIVE_SECTION, sectionId); } catch (e) { }
     this._renderSection(sectionId);
-    // 高亮侧栏
     document.querySelectorAll('.nav-item').forEach(el => {
       el.classList.toggle('active', el.dataset.section === sectionId);
     });
@@ -710,7 +685,6 @@ class SettingsApp {
         throw new Error('无效的设置文件：缺少 settings 字段');
       }
 
-      // 校验每个键
       const validated = {};
       let importedCount = 0;
       for (const [key, value] of Object.entries(data.settings)) {
@@ -725,7 +699,6 @@ class SettingsApp {
         throw new Error('文件中没有找到任何可识别的设置项');
       }
 
-      // 合并
       this.settings = { ...SETTINGS_DEFAULTS, ...validated };
       this._presetOverrides = {};
       this._saveSettings();
@@ -751,7 +724,7 @@ class SettingsApp {
     try {
       const all = await chrome.storage.local.get(null);
       const keysToRemove = Object.keys(all).filter(k =>
-        k.startsWith('domain_cache_') || k.startsWith('icp_api_v1_')
+        k.startsWith(STORAGE_KEYS.DOMAIN_CACHE) || k.startsWith(STORAGE_KEYS.ICP_CACHE_PREFIX)
       );
       if (keysToRemove.length > 0) {
         await chrome.storage.local.remove(keysToRemove);
@@ -769,7 +742,7 @@ class SettingsApp {
       const all = await chrome.storage.local.get(null);
       // 保留 global_settings（将被重置）
       const keysToRemove = Object.keys(all).filter(k =>
-        !k.startsWith('global_settings')  // 保留设置键，仅重置
+        !k.startsWith(STORAGE_KEYS.GLOBAL_SETTINGS)  // 保留设置键，仅重置
       );
       if (keysToRemove.length > 0) {
         await chrome.storage.local.remove(keysToRemove);
@@ -842,11 +815,10 @@ class SettingsApp {
     toast.textContent = message;
     container.appendChild(toast);
 
-    // 3 秒后自动移除
     setTimeout(() => {
       toast.classList.add('removing');
       toast.addEventListener('animationend', () => toast.remove());
-    }, 3000);
+    }, TOAST_DURATION_MS);
   }
 
   // ==================== 白名单编辑 ====================
@@ -887,7 +859,6 @@ class SettingsApp {
 
     await this._loadWhitelist();
 
-    // 绑定事件
     document.getElementById('wl-import-btn')?.addEventListener('click', () => {
       document.getElementById('wl-import-file')?.click();
     });
@@ -921,13 +892,12 @@ class SettingsApp {
     const editor = document.getElementById('whitelist-editor');
     if (!editor) return;
     const lines = editor.value.split(/[\n\r]+/).map(s => s.trim()).filter(Boolean);
-    const domains = [...new Set(lines)]; // 去重
-    try {
+    const domains = [...new Set(lines)];    try {
       await chrome.storage.local.set({ [STORAGE_KEYS.WHITELIST]: domains });
       // 通知 Service Worker 刷新内存缓存
       try {
         await chrome.runtime.sendMessage({
-          type: 'BULK_UPDATE_WHITELIST',
+          type: MSG_TYPES.BULK_UPDATE_WHITELIST,
           payload: { domains }
         });
       } catch (e) { /* SW 可能不在运行 */ }
@@ -1351,7 +1321,6 @@ class SettingsApp {
             <div class="about-row"><span class="about-label">上次检查</span><span class="about-value">${timeAgo}</span></div>
             ${failedNote}
           </div>`;
-        // 替换检查更新按钮为绿色前往下载
         if (info.releaseUrl) this._swapToDownloadBtn(info.releaseUrl);
       } else {
         statusEl.innerHTML = `
@@ -1476,15 +1445,15 @@ class SettingsApp {
               项目链接
             </h3>
             <div class="about-links">
-              <a class="about-link" href="https://github.com/Lolitide/VirusDetector" target="_blank" rel="noopener">
+              <a class="about-link" href="${GITHUB_REPO_PAGE}" target="_blank" rel="noopener">
                 <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" style="vertical-align:-2px;margin-right:3px;"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
                 GitHub 仓库
               </a>
-              <a class="about-link" href="https://github.com/Lolitide/VirusDetector/issues/new/choose" target="_blank" rel="noopener">
+              <a class="about-link" href="${GITHUB_NEW_ISSUE_URL}" target="_blank" rel="noopener">
                 <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="vertical-align:-2px;margin-right:3px;"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
                 反馈问题
               </a>
-              <a class="about-link" href="https://github.com/Lolitide/VirusDetector/releases" target="_blank" rel="noopener">
+              <a class="about-link" href="${GITHUB_RELEASES_PAGE}" target="_blank" rel="noopener">
                 <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="vertical-align:-2px;margin-right:3px;"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
                 更新日志
               </a>
@@ -1504,14 +1473,12 @@ class SettingsApp {
 document.addEventListener('DOMContentLoaded', () => {
   const app = new SettingsApp();
   app.init().then(() => {
-    // 异步加载存储统计
     app._loadStorageStats();
   }).catch(err => {
     console.error('[Settings] 初始化失败:', err);
   });
 });
 
-// 扩展 SettingsApp 以支持存储统计
 SettingsApp.prototype._loadStorageStats = async function () {
   const statsEl = document.getElementById('storage-stats');
   if (!statsEl) return;
@@ -1523,12 +1490,12 @@ SettingsApp.prototype._loadStorageStats = async function () {
     const percent = ((bytesInUse / quota) * 100).toFixed(1);
 
     const cacheKeys = Object.keys(all).filter(k =>
-      k.startsWith('domain_cache_')
+      k.startsWith(STORAGE_KEYS.DOMAIN_CACHE)
     );
     const icpApiCacheKeys = Object.keys(all).filter(k =>
-      k.startsWith('icp_api_v1_')
+      k.startsWith(STORAGE_KEYS.ICP_CACHE_PREFIX)
     );
-    const tabStateKeys = Object.keys(all).filter(k => k.startsWith('tab_state_'));
+    const tabStateKeys = Object.keys(all).filter(k => k.startsWith(STORAGE_KEYS.TAB_STATE_PREFIX));
     const whitelist = all[STORAGE_KEYS.WHITELIST] || [];
     const blacklist = all[STORAGE_KEYS.DOWNLOAD_BLACKLIST] || [];
     const siteBlacklist = all[STORAGE_KEYS.SITE_BLACKLIST] || [];

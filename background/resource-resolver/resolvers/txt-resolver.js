@@ -16,7 +16,7 @@ import { BaseResolver } from './base-resolver.js';
 import {
   RESOURCE_TYPES, SOURCE_TYPES,
   URL_PATTERN, ARCHIVE_URL_PATTERN,
-  MAX_TXT_SIZE
+  MAX_TXT_SIZE, SNIPPET_PADDING
 } from '../config.js';
 
 export class TxtResolver extends BaseResolver {
@@ -27,12 +27,10 @@ export class TxtResolver extends BaseResolver {
   async resolve(node, context) {
     const discovered = [];
 
-    // 检查深度
     if (node.depth >= context.config.maxDepth) {
       return discovered;
     }
 
-    // 标记已解析
     node.metadata._resolved = true;
 
     let content;
@@ -67,7 +65,6 @@ export class TxtResolver extends BaseResolver {
       if (absoluteUrl) foundUrls.add(absoluteUrl);
     }
 
-    // 创建子节点
     for (const url of foundUrls) {
       const { ext, isArchive, isExecutable, isTxt, isJson } = this.classifyUrl(url);
       const isCrossDomain = this.isCrossDomain(url, context.pageUrl);
@@ -96,8 +93,8 @@ export class TxtResolver extends BaseResolver {
           isCrossDomain,
           isExternal: isCrossDomain,
           textSnippet: content.substring(
-            Math.max(0, content.indexOf(url) - 40),
-            Math.min(content.length, content.indexOf(url) + url.length + 40)
+            Math.max(0, content.indexOf(url) - SNIPPET_PADDING),
+            Math.min(content.length, content.indexOf(url) + url.length + SNIPPET_PADDING)
           )
         }
       });

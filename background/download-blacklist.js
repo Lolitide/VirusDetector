@@ -29,7 +29,7 @@
  *   - 容量上限：最多 500 条
  */
 
-import { STORAGE_KEYS, DOWNLOAD_BLACKLIST_CLEANUP_DAYS, DOWNLOAD_BLACKLIST_MAX_ENTRIES } from '../utils/constants.js';
+import { STORAGE_KEYS, DOWNLOAD_BLACKLIST_CLEANUP_DAYS, DOWNLOAD_BLACKLIST_MAX_ENTRIES, BLACKLIST_MAX_SOURCE_PAGES, DAY_MS } from '../utils/constants.js';
 import { UrlUtils } from '../utils/url-utils.js';
 
 export class DownloadBlacklist {
@@ -62,7 +62,7 @@ export class DownloadBlacklist {
    */
   static async isBlacklisted(domain) {
     if (!domain) return false;
-    const normalized = domain.toLowerCase();
+    const normalized = domain.toLowerCase().trim();
     // 精确匹配 + 主域名匹配（防止子域名绕过）
     const mainDomain = UrlUtils.getMainDomain(normalized);
     const blacklist = await this.getAll();
@@ -77,7 +77,7 @@ export class DownloadBlacklist {
   static async getEntry(domain) {
     if (!domain) return null;
     const blacklist = await this.getAll();
-    const normalized = domain.toLowerCase();
+    const normalized = domain.toLowerCase().trim();
     const mainDomain = UrlUtils.getMainDomain(normalized);
     return blacklist[normalized] || blacklist[mainDomain] || null;
   }
@@ -96,16 +96,15 @@ export class DownloadBlacklist {
   static async add(domain, sourcePageInfo, fileType) {
     if (!domain) return;
 
-    const normalized = domain.toLowerCase();
+    const normalized = domain.toLowerCase().trim();
     const blacklist = await this.getAll();
     const now = Date.now();
     const existing = blacklist[normalized];
 
     if (existing) {
-      // 更新已有条目
       existing.hitCount += 1;
       existing.lastHit = now;
-      // 追加源页面（去重，最多保留 20 条）
+      // 追加源页面（去重，最多保留 BLACKLIST_MAX_SOURCE_PAGES 条）
       const isDuplicate = existing.sourcePages.some(
         p => p.pageDomain === sourcePageInfo.pageDomain
       );
@@ -115,16 +114,14 @@ export class DownloadBlacklist {
           pageUrl: sourcePageInfo.pageUrl || '',
           timestamp: now
         });
-        if (existing.sourcePages.length > 20) {
-          existing.sourcePages = existing.sourcePages.slice(-20);
+        if (existing.sourcePages.length > BLACKLIST_MAX_SOURCE_PAGES) {
+          existing.sourcePages = existing.sourcePages.slice(-BLACKLIST_MAX_SOURCE_PAGES);
         }
       }
-      // 追加文件类型
       if (fileType && !existing.fileTypes.includes(fileType)) {
         existing.fileTypes.push(fileType);
       }
     } else {
-      // 新增条目
       this._enforceCapacity(blacklist, normalized);
 
       blacklist[normalized] = {
@@ -169,7 +166,7 @@ export class DownloadBlacklist {
   static async cleanup() {
     const blacklist = await this.getAll();
     const now = Date.now();
-    const threshold = DOWNLOAD_BLACKLIST_CLEANUP_DAYS * 24 * 60 * 60 * 1000;
+    const threshold = DOWNLOAD_BLACKLIST_CLEANUP_DAYS * DAY_MS;
     let removedCount = 0;
 
     for (const [domain, entry] of Object.entries(blacklist)) {
