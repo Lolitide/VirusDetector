@@ -381,6 +381,38 @@ import {
     } catch (e) { return null; }
   }
 
+  async function getManagedTarget() {
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tabs.length === 0) throw new Error('no_tab');
+
+    const tab = tabs[0];
+    const tabUrl = tab.url || '';
+    if (/^https?:/i.test(tabUrl)) {
+      return { tab, url: tabUrl, domain: new URL(tabUrl).hostname };
+    }
+
+    const state = await fetchState();
+    if (state?.url && /^https?:/i.test(state.url)) {
+      return {
+        tab,
+        url: state.url,
+        domain: state.domain || new URL(state.url).hostname
+      };
+    }
+
+    try {
+      const warningUrl = new URL(tabUrl);
+      const originalUrl = warningUrl.searchParams.get('originalUrl') || '';
+      const domain = warningUrl.searchParams.get('domain') || '';
+      if (/^https?:/i.test(originalUrl)) {
+        return { tab, url: originalUrl, domain: domain || new URL(originalUrl).hostname };
+      }
+      if (domain) return { tab, url: `https://${domain}`, domain };
+    } catch {}
+
+    throw new Error('no_managed_site');
+  }
+
   async function requestReanalysis() {
     try {
       const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -508,9 +540,7 @@ import {
       reportFalseBtn.classList.add('active');
       reportFalseBtn.disabled = true;
       try {
-        const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-        if (tabs.length === 0) return;
-        const domain = new URL(tabs[0].url || '').hostname;
+        const { url, domain } = await getManagedTarget();
         await chrome.runtime.sendMessage({
           type: MSG_TYPES.SUBMIT_REPORT,
           payload: { reportType: REPORT_TYPES.FALSE_POSITIVE, domain, note: '' }
@@ -555,9 +585,7 @@ import {
       reportPhishBtn.classList.add('active');
       reportPhishBtn.disabled = true;
       try {
-        const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-        if (tabs.length === 0) return;
-        const domain = new URL(tabs[0].url || '').hostname;
+        const { url, domain } = await getManagedTarget();
         await chrome.runtime.sendMessage({
           type: MSG_TYPES.SUBMIT_REPORT,
           payload: { reportType: REPORT_TYPES.CONFIRMED_PHISH, domain, note: '' }

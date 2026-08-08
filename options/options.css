@@ -516,6 +516,61 @@ html, body {
   color: var(--green);
 }
 
+.intervention-row {
+  align-items: flex-start;
+}
+
+.intervention-setting-control {
+  width: min(100%, 460px);
+  flex-direction: column;
+  align-items: stretch;
+  gap: 7px;
+}
+
+.intervention-segmented {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+}
+
+.intervention-choice {
+  min-height: 32px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text2);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background-color 160ms ease, color 160ms ease;
+}
+
+.intervention-choice:hover {
+  color: var(--text);
+}
+
+.intervention-choice.active {
+  background: var(--bg3);
+  color: var(--green);
+  font-weight: 600;
+}
+
+.intervention-choice:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 1px;
+}
+
+.intervention-description {
+  min-height: 34px;
+  color: var(--text2);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 /* ===== Preset Sensitivity Slider ===== */
 .preset-slider {
   display: flex;
@@ -1113,6 +1168,15 @@ select:focus {
 
   .setting-control {
     align-self: flex-end;
+  }
+
+  .intervention-setting-control {
+    width: 100%;
+    align-self: stretch;
+  }
+
+  .intervention-choice {
+    padding-inline: 4px;
   }
 }
 

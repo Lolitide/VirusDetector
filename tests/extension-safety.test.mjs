@@ -13,6 +13,17 @@ const manifest = JSON.parse(readFileSync(new URL('../manifest.json', import.meta
 const navigationGuard = readFileSync(new URL('../content/navigation-guard.js', import.meta.url), 'utf8');
 const contentScript = readFileSync(new URL('../content/content-script.js', import.meta.url), 'utf8');
 const serviceWorker = readFileSync(new URL('../background/service-worker.js', import.meta.url), 'utf8');
+const siteAccessManager = readFileSync(new URL('../background/site-access-manager.js', import.meta.url), 'utf8');
+const warningHtml = readFileSync(new URL('../warning/warning.html', import.meta.url), 'utf8');
+const warningCss = readFileSync(new URL('../warning/warning.css', import.meta.url), 'utf8');
+const warningScript = readFileSync(new URL('../warning/warning.js', import.meta.url), 'utf8');
+const reportScript = readFileSync(new URL('../warning/report.js', import.meta.url), 'utf8');
+const themeInitScript = readFileSync(new URL('../popup/theme-init.js', import.meta.url), 'utf8');
+const onboardingHtml = readFileSync(new URL('../onboarding/onboarding.html', import.meta.url), 'utf8');
+const onboardingCss = readFileSync(new URL('../onboarding/onboarding.css', import.meta.url), 'utf8');
+const onboardingScript = readFileSync(new URL('../onboarding/onboarding.js', import.meta.url), 'utf8');
+const optionsScript = readFileSync(new URL('../options/options.js', import.meta.url), 'utf8');
+const settingsSchema = readFileSync(new URL('../utils/settings-schema.js', import.meta.url), 'utf8');
 
 function sourceBetween(source, startMarker, endMarker) {
   const start = source.indexOf(startMarker);
@@ -154,6 +165,381 @@ test('adding a site to the whitelist removes an existing page blocker', () => {
     'case MSG_TYPES.ADD_TO_WHITELIST:',
     'case MSG_TYPES.REMOVE_FROM_WHITELIST:'
   );
+  const tabSync = sourceBetween(
+    serviceWorker,
+    'async function markTabWhitelisted',
+    'async function recheckTabAfterWhitelistRemoval'
+  );
 
-  assert.match(handler, /removeDownloadBlocker\s*\(/);
+  assert.match(handler, /whitelistSite\(url, tabs\[0\]\.id\)/);
+  assert.match(tabSync, /removeDownloadBlocker\(tabId\)/);
+});
+
+test('known threats are checked before navigation without inventing page evidence', () => {
+  const preflight = sourceBetween(
+    serviceWorker,
+    'async function runNavigationPreflight',
+    'chrome.webNavigation.onBeforeNavigate.addListener'
+  );
+
+  assert.match(serviceWorker, /chrome\.webNavigation\.onBeforeNavigate\.addListener/);
+  assert.match(preflight, /isWhitelisted\s*\(/);
+  assert.match(preflight, /SiteAccessManager\.isBlacklisted\s*\(/);
+  assert.match(preflight, /CacheManager\.get\s*\(/);
+  assert.match(preflight, /cached\s*&&\s*\(cached\.isMalicious \|\| cached\.correctUrl\)/);
+  assert.match(preflight, /navigation\.committed/);
+  assert.match(preflight, /shouldUseFullPageWarning\(settings,\s*tabState\)/);
+  assert.match(preflight, /triggerWarningFlow\(tabId,\s*tabState,\s*stage\)/);
+  assert.match(preflight, /isCurrentNavigation/);
+  assert.doesNotMatch(preflight, /ScoringEngine\.evaluate/);
+});
+
+test('soft preflight warnings are applied as soon as the risky document commits', () => {
+  const preflight = sourceBetween(
+    serviceWorker,
+    'async function runNavigationPreflight',
+    'chrome.webNavigation.onBeforeNavigate.addListener'
+  );
+  const committedWarning = sourceBetween(
+    serviceWorker,
+    'async function applyPendingSoftPreflightWarning',
+    '// 新文档提交后清除上一个页面的认证交互标记'
+  );
+
+  assert.match(preflight, /_pendingSoftPreflightWarnings\.set/);
+  assert.match(committedWarning, /pending\.generation !== navigation\.generation/);
+  assert.match(committedWarning, /SiteAccessManager\.isWhitelisted/);
+  assert.match(committedWarning, /tabState\.analysisDocumentId = navigation\.documentId/);
+  assert.match(committedWarning, /triggerWarningFlow\(details\.tabId,\s*tabState,\s*['"]postload['"]\)/);
+  assert.match(serviceWorker, /onCommitted\.addListener[\s\S]*applyPendingSoftPreflightWarning/);
+});
+
+test('high-risk responses choose between the original warning and the safe blocking page', () => {
+  const warningFlow = sourceBetween(
+    serviceWorker,
+    'async function triggerWarningFlow',
+    'async function injectDownloadBlocker'
+  );
+  const warningPage = sourceBetween(
+    serviceWorker,
+    'async function openWarningPage',
+    '// ==================== 页面分析 ===================='
+  );
+  const blockedContext = sourceBetween(
+    serviceWorker,
+    'function createBlockedContext',
+    'async function openReportWindow'
+  );
+
+  assert.match(warningFlow, /shouldUseFullPageWarning\(settings,\s*tabState\)/);
+  assert.match(warningFlow, /openWarningPage\(tabId,\s*tabState,\s*stage\)/);
+  assert.match(warningFlow, /injectTopWarningBanner\(tabId,\s*tabState\)/);
+  assert.match(warningPage, /chrome\.tabs\.update\(tabId,\s*\{\s*url:\s*warningUrl/);
+  assert.match(warningPage, /originalUrl/);
+  assert.match(blockedContext, /nonce:\s*createBlockedNonce\(\)/);
+  assert.match(blockedContext, /safeUrl/);
+});
+
+test('risk notifications complete alongside the warning page and target the original tab', () => {
+  const notification = sourceBetween(
+    serviceWorker,
+    'async function showDesktopRiskNotification',
+    'function createAnalysisIdentity'
+  );
+  const warningFlow = sourceBetween(
+    serviceWorker,
+    'async function triggerWarningFlow',
+    'async function injectDownloadBlocker'
+  );
+  const notificationButton = sourceBetween(
+    serviceWorker,
+    'async function handleRiskNotificationButton',
+    '// 标签页关闭清理'
+  );
+
+  assert.match(notification, /typeof chrome\.notifications\.getPermissionLevel === ['"]function['"]/);
+  assert.match(notification, /await chrome\.notifications\.create/);
+  assert.match(notification, /risk:\$\{encodeURIComponent\(domain\)\}/);
+  assert.match(notification, /chrome\.notifications\.getAll\(\)/);
+  assert.match(notification, /visibleRiskIds\.includes\(notificationId\)\) return false/);
+  assert.match(notification, /chrome\.notifications\.clear\(id\)/);
+  assert.match(notification, /requireInteraction:\s*false/);
+  assert.match(notification, /setTimeout\([\s\S]*RISK_NOTIFICATION_DISPLAY_MS/);
+  assert.match(serviceWorker, /RISK_NOTIFICATION_DISPLAY_MS = 5000/);
+  assert.match(serviceWorker, /_riskNotificationQueue/);
+  assert.match(serviceWorker, /scheduleRiskNotificationContextCleanup/);
+  assert.match(serviceWorker, /queueRiskNotificationContext/);
+  assert.match(notification, /navigationGeneration:\s*tabState\.navigationGeneration/);
+  assert.match(notification, /analysisDocumentId:\s*tabState\.analysisDocumentId/);
+  assert.match(warningFlow, /settings\.desktopNotifications !== false/);
+  assert.match(warningFlow, /notificationTask = settings[\s\S]*showDesktopRiskNotification/);
+  assert.match(warningFlow, /Promise\.all\([\s\S]*openWarningPage[\s\S]*notificationTask/);
+  assert.match(notificationButton, /takeRiskNotificationContext\(notificationId\)/);
+  assert.match(notificationButton, /chrome\.tabs\.get\(context\.tabId\)/);
+  assert.match(notificationButton, /tabStateMatchesAnalysisIdentity\(tabState,\s*context\)/);
+  assert.match(notificationButton, /tab\?\.pendingUrl/);
+  assert.match(notificationButton, /isCurrentAnalysisIdentity\(context\.tabId,\s*context\)/);
+  assert.match(notificationButton, /blockedContext\?\.navigationGeneration === context\.navigationGeneration/);
+  assert.match(notificationButton, /blockedContext\?\.analysisDocumentId === context\.analysisDocumentId/);
+  assert.match(notificationButton, /chrome\.tabs\.remove\(context\.tabId\)/);
+  assert.doesNotMatch(notificationButton, /chrome\.tabs\.query/);
+  assert.match(serviceWorker, /_riskNotificationConsumptions/);
+});
+
+test('the warning page exposes only safe primary actions and confirms trust', () => {
+  assert.match(warningHtml, /id="btn-back"[^>]*>回退<\/button>/);
+  assert.match(warningHtml, /id="btn-ask-ai"/);
+  assert.match(warningHtml, /你确认信任它吗？/);
+  assert.match(warningHtml, /是的，我信任它/);
+  assert.match(warningHtml, /不，我反悔了/);
+  assert.doesNotMatch(warningHtml, /id="risk-score"|威胁评分/);
+  assert.doesNotMatch(warningHtml, /关闭此页面|安全建议|此检测有误/);
+
+  assert.match(warningScript, /https:\/\/www\.doubao\.com\/chat\/\?q=/);
+  assert.match(warningScript, /type:\s*['"]TRUST_BLOCKED_SITE['"]/);
+  assert.match(warningScript, /payload:\s*\{\s*nonce\s*\}/);
+  assert.match(warningScript, /type:\s*['"]RETURN_TO_SAFETY['"]/);
+  assert.doesNotMatch(warningScript, /window\.history\.go/);
+});
+
+test('blocked actions require a trusted extension context', () => {
+  const trustHandler = sourceBetween(
+    serviceWorker,
+    'case MSG_TYPES.TRUST_BLOCKED_SITE:',
+    'case MSG_TYPES.RETURN_TO_SAFETY:'
+  );
+  const warningResources = (manifest.web_accessible_resources || [])
+    .flatMap(entry => entry.resources || []);
+
+  assert.equal(warningResources.includes('warning/warning.html'), false);
+  assert.match(trustHandler, /requireBlockedContext/);
+  assert.match(trustHandler, /message\.payload\?\.nonce/);
+  assert.doesNotMatch(trustHandler, /message\.payload\?\.url/);
+});
+
+test('stale analysis cannot replace a newer navigation', () => {
+  const warningFlow = sourceBetween(
+    serviceWorker,
+    'async function triggerWarningFlow',
+    'async function injectDownloadBlocker'
+  );
+
+  assert.match(warningFlow, /isCurrentAnalysisIdentity\(tabId,\s*createAnalysisIdentity\(tabState\)/);
+  assert.match(serviceWorker, /_navigationGenerations/);
+  assert.match(serviceWorker, /sender\.tab\.url !== url/);
+  assert.match(serviceWorker, /analysisDocumentId/);
+  assert.match(serviceWorker, /isCurrentAnalysisIdentity/);
+  assert.match(serviceWorker, /tabStateMatchesAnalysisIdentity/);
+  assert.match(serviceWorker, /isWarningPageUrl\(tab\.pendingUrl \|\| ['"]['"]\)/);
+});
+
+test('async Whois and ICP results are bound to one document', () => {
+  const whoisUpdate = sourceBetween(
+    serviceWorker,
+    'async function _applyWhoisUpdate',
+    '// ==================== ICP 异步核验 ===================='
+  );
+  const icpUpdate = sourceBetween(
+    serviceWorker,
+    'async function _applyIcpUpdate',
+    'async function _postReportToWorker'
+  );
+
+  assert.match(serviceWorker, /navigationGeneration:\s*tabState\.navigationGeneration/);
+  assert.match(serviceWorker, /analysisDocumentId:\s*tabState\.analysisDocumentId/);
+  assert.match(whoisUpdate, /isCurrentAnalysisIdentity\(tabId,\s*ctx\)/);
+  assert.match(whoisUpdate, /tabStateMatchesAnalysisIdentity\(tabState,\s*ctx\)/);
+  assert.match(icpUpdate, /isCurrentAnalysisIdentity\(tabId,\s*snapshot\)/);
+  assert.match(icpUpdate, /tabStateMatchesAnalysisIdentity\(tabState,\s*snapshot\)/);
+  assert.match(whoisUpdate, /saveAnalysisStateIfCurrent/);
+  assert.match(whoisUpdate, /cacheAnalysisIfCurrent/);
+  assert.match(icpUpdate, /saveAnalysisStateIfCurrent/);
+  assert.match(icpUpdate, /cacheAnalysisIfCurrent/);
+});
+
+test('redirects and same-document navigation keep the current document identity', () => {
+  assert.match(serviceWorker, /navigation\.url\s*=\s*details\.url/);
+  assert.match(serviceWorker, /onHistoryStateUpdated\.addListener/);
+  assert.match(serviceWorker, /onReferenceFragmentUpdated\.addListener/);
+  assert.match(serviceWorker, /handleSameDocumentNavigation/);
+});
+
+test('warning state and reports use the backend blocked context', () => {
+  assert.match(serviceWorker, /isWarningPageUrl\(url\) \|\| isReportPageUrl\(url\)\) return/);
+  assert.match(serviceWorker, /case MSG_TYPES\.OPEN_BLOCKED_REPORT/);
+  assert.match(serviceWorker, /requireBlockedContext\([\s\S]*REPORT_PAGE_URL/);
+  assert.match(reportScript, /payload:\s*\{\s*reportType:\s*['"]false_positive['"],\s*nonce/);
+  assert.match(reportScript, /if \(!response\?\.success\)/);
+});
+
+test('site blacklist changes reconcile every open tab', () => {
+  assert.match(serviceWorker, /function syncSiteAccessStateAcrossTabs/);
+  assert.match(serviceWorker, /applyBlacklistToTab/);
+  assert.match(serviceWorker, /releaseBlacklistFromTab/);
+  assert.match(serviceWorker, /changes\[STORAGE_KEYS\.WHITELIST\] \|\| changes\[STORAGE_KEYS\.SITE_BLACKLIST\]/);
+});
+
+test('whitelist removal uses only the serialized cross-tab reconciliation queue', () => {
+  const handler = sourceBetween(
+    serviceWorker,
+    'case MSG_TYPES.REMOVE_FROM_WHITELIST:',
+    'case MSG_TYPES.CHECK_WHITELIST:'
+  );
+
+  assert.match(handler, /syncSiteAccessStateAcrossTabs\(\)/);
+  assert.doesNotMatch(handler, /recheckTabAfterWhitelistRemoval/);
+  assert.match(serviceWorker, /url:\s*tabState\.url/);
+  assert.match(serviceWorker, /tabStateMatchesAnalysisIdentity\(tabState,\s*backup\)/);
+});
+
+test('blocked reports fall back to a normal tab when popup creation fails', () => {
+  const handler = sourceBetween(
+    serviceWorker,
+    'case MSG_TYPES.OPEN_BLOCKED_REPORT:',
+    '// 下载二次确认'
+  );
+  const reportWindow = sourceBetween(
+    serviceWorker,
+    'async function openReportWindow',
+    'async function openRiskReport'
+  );
+
+  assert.match(handler, /openReportWindow\(context\)/);
+  assert.match(reportWindow, /try\s*\{[\s\S]*chrome\.windows\.create/);
+  assert.match(reportWindow, /catch\s*\{[\s\S]*chrome\.tabs\.create/);
+});
+
+test('the warning page inherits light, dark, and automatic extension themes', () => {
+  assert.match(warningHtml, /<script src="\.\.\/popup\/theme-init\.js"><\/script>/);
+  assert.match(warningHtml, /<html[^>]+style="display: none;"/);
+  assert.match(warningCss, /\[data-theme="light"\]/);
+  assert.match(warningCss, /\[data-theme="dark"\]/);
+  assert.match(themeInitScript, /localStorage\.getItem\(['"]vt_theme['"]\)/);
+  assert.match(warningScript, /chrome\.storage\.local\.get\(['"]global_settings['"]\)/);
+  assert.match(warningScript, /chrome\.storage\.onChanged\.addListener/);
+  assert.match(warningScript, /selectedTheme === ['"]auto['"]/);
+  assert.match(warningScript, /prefers-color-scheme:\s*dark/);
+});
+
+test('the first-install setup waits for initialization and respects reduced motion', () => {
+  assert.match(onboardingHtml, /<body class="onboarding-loading">/);
+  assert.match(onboardingHtml, /id="startup-transition"[^>]+role="status"/);
+  assert.match(onboardingHtml, /data-onboarding-content inert aria-hidden="true"/);
+  assert.match(onboardingCss, /@keyframes startup-spin/);
+  assert.match(onboardingCss, /body\.onboarding-ready \.startup-transition/);
+  assert.match(onboardingCss, /@media \(prefers-reduced-motion: reduce\)/);
+  assert.match(onboardingScript, /startupMinDuration = reducedMotion\.matches \? 0 : 420/);
+  assert.match(onboardingScript, /await init\(\)/);
+  assert.match(onboardingScript, /await waitForStartupTransition\(\)/);
+  assert.match(onboardingScript, /removeAttribute\(['"]inert['"]\)/);
+  assert.match(onboardingScript, /removeAttribute\(['"]aria-hidden['"]\)/);
+  assert.match(onboardingScript, /setTimeout\(unlockOnboardingContent,\s*startupRevealDuration\)/);
+  assert.match(onboardingScript, /finishStartupTransition\(\)/);
+});
+
+test('settings and first-install setup expose the same independent intervention modes', () => {
+  for (const mode of ['absolute', 'low', 'balanced', 'high', 'replace']) {
+    assert.match(onboardingHtml, new RegExp(`data-intervention=["']${mode}["']`));
+  }
+
+  assert.match(settingsSchema, /key:\s*['"]warningInterventionMode['"],\s*type:\s*['"]intervention['"]/);
+  assert.match(settingsSchema, /恢复原版网页置顶警告/);
+  assert.match(optionsScript, /case ['"]intervention['"]/);
+  assert.match(optionsScript, /intervention-choice/);
+  assert.match(onboardingScript, /saveSetting\(['"]warningInterventionMode['"]/);
+  assert.match(onboardingScript, /WARNING_INTERVENTION_MODES/);
+});
+
+test('the automatic risk report is independent and manual report access remains available', () => {
+  const warningFlow = sourceBetween(
+    serviceWorker,
+    'async function triggerWarningFlow',
+    'async function injectDownloadBlocker'
+  );
+  const reportHandler = sourceBetween(
+    serviceWorker,
+    'case MSG_TYPES.OPEN_RISK_REPORT:',
+    '// 下载二次确认'
+  );
+
+  assert.match(settingsSchema, /autoOpenRiskReport:\s*false/);
+  assert.match(settingsSchema, /key:\s*['"]autoOpenRiskReport['"],\s*type:\s*['"]boolean['"]/);
+  assert.match(onboardingHtml, /data-key="autoOpenRiskReport"/);
+  assert.match(onboardingHtml, /安全页面不会自动打开/);
+  assert.doesNotMatch(onboardingHtml, /data-key="showDetectionDetails"/);
+  assert.match(warningFlow, /settings\.autoOpenRiskReport === true/);
+  assert.match(warningFlow, /openRiskReport\(tabId,\s*tabState,\s*\{ automatic: true, stage \}\)/);
+  assert.match(serviceWorker, /_automaticReportOpenings/);
+  assert.match(serviceWorker, /openRiskReportOnce/);
+  assert.match(serviceWorker, /shouldTriggerWarningFlow\(settings,\s*current\)/);
+  assert.match(serviceWorker, /查看报告/);
+  assert.match(serviceWorker, /type:\s*['"]OPEN_RISK_REPORT['"]/);
+  assert.match(reportHandler, /tabState\.url !== senderUrl/);
+  assert.match(reportHandler, /openRiskReport\(tabId,\s*tabState\)/);
+  assert.match(warningScript, /type:\s*['"]OPEN_BLOCKED_REPORT['"]/);
+});
+
+test('soft intervention can upgrade after asynchronous scoring', () => {
+  const warningFlow = sourceBetween(
+    serviceWorker,
+    'async function triggerWarningFlow',
+    'async function injectDownloadBlocker'
+  );
+  const whoisUpdate = sourceBetween(
+    serviceWorker,
+    'async function _applyWhoisUpdate',
+    '// ==================== ICP 异步核验 ===================='
+  );
+  const icpUpdate = sourceBetween(
+    serviceWorker,
+    'async function _applyIcpUpdate',
+    'async function _postReportToWorker'
+  );
+
+  assert.match(warningFlow, /injectTopWarningBanner\(tabId,\s*tabState\)/);
+  assert.match(serviceWorker, /function injectTopWarningBannerFunc\(\)/);
+  assert.match(serviceWorker, /__virus_detector_overlay/);
+  assert.match(serviceWorker, /attachShadow\(\{ mode: ['"]closed['"] \}\)/);
+  assert.match(serviceWorker, /__virusDetectorTopWarningState/);
+  assert.match(serviceWorker, /new MutationObserver/);
+  assert.match(serviceWorker, /warningState\?\.observer\?\.disconnect/);
+  assert.match(whoisUpdate, /crossedInterventionThreshold/);
+  assert.match(icpUpdate, /crossedInterventionThreshold/);
+});
+
+test('confirmed impersonation bypasses ordinary sensitivity thresholds', () => {
+  const analyzePage = sourceBetween(
+    serviceWorker,
+    'async function analyzePage',
+    'async function _applyWhoisUpdate'
+  );
+
+  assert.match(serviceWorker, /shouldTriggerWarningFlow/);
+  assert.match(analyzePage, /const shouldWarn = shouldTriggerWarningFlow\(settings,\s*tabState\)/);
+  assert.match(analyzePage, /isMalicious:\s*shouldWarn/);
+  assert.match(analyzePage, /if \(shouldWarn\)\s*\{[\s\S]*triggerWarningFlow/);
+});
+
+test('AI handoff shares only the blocked site origin', () => {
+  const shareableUrl = sourceBetween(
+    warningScript,
+    'function getShareableUrl',
+    'const params = new URLSearchParams'
+  );
+
+  assert.match(shareableUrl, /return parsed\.origin/);
+  assert.doesNotMatch(shareableUrl, /parsed\.href/);
+  assert.match(warningScript, /https:\/\/www\.doubao\.com\/chat\/\?q=/);
+});
+
+test('all site access changes go through one manager', () => {
+  assert.match(serviceWorker, /import \{ SiteAccessManager \} from ['"]\.\/site-access-manager\.js['"]/);
+  assert.match(siteAccessManager, /class SiteAccessManager/);
+  assert.match(siteAccessManager, /addToWhitelist/);
+  assert.match(siteAccessManager, /addToBlacklist/);
+  assert.match(siteAccessManager, /replaceWhitelist/);
+  assert.match(siteAccessManager, /_mutations/);
+  assert.doesNotMatch(serviceWorker, /import \{ SiteBlacklist \}/);
+  assert.match(warningScript, /changes\.whitelist/);
+  assert.match(warningScript, /CHECK_WHITELIST/);
 });

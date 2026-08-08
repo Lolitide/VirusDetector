@@ -1,75 +1,402 @@
-* { margin:0; padding:0; box-sizing:border-box; }
+
+:root {
+  font: 100%/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable Text", "Microsoft YaHei UI", sans-serif;
+  font-optical-sizing: auto;
+  --blue: #175ddc;
+  --blue-hover: #1252c4;
+  --red: #d71920;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+  --page: #ffffff;
+  --surface: #ffffff;
+  --surface-muted: #f1f3f5;
+  --surface-muted-hover: #e7e9ec;
+  --text: #16191f;
+  --secondary: #5c6573;
+  --tertiary: #707887;
+  --border: #d6d9de;
+  --danger-soft: #fff1f2;
+  --danger-soft-hover: #ffe5e7;
+  --scrim: rgba(20, 24, 31, 0.28);
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #191b1f;
+  --surface: #23262b;
+  --surface-muted: #2c3036;
+  --surface-muted-hover: #353a42;
+  --text: #f5f6f8;
+  --secondary: #b2b7c0;
+  --tertiary: #9299a5;
+  --border: #41464f;
+  --danger-soft: #3c2529;
+  --danger-soft-hover: #4b292e;
+  --red: #ff5b61;
+  --blue: #4c8dff;
+  --blue-hover: #6a9fff;
+  --scrim: rgba(0, 0, 0, 0.48);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  min-height: 100%;
+}
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei',
-    'PingFang SC', 'Hiragino Sans GB', sans-serif;
-  background: #1a1a2e; color: #e0e0e0; font-size: 14px;
-  overflow-x: hidden;
+  margin: 0;
+  min-width: 320px;
+  min-height: 100dvh;
+  background: var(--page);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
-.warning-container {
-  max-width: 100%; padding: 0;
+button {
+  font: inherit;
 }
 
-/* ===== 顶部红色标题 ===== */
-.warning-header {
-  background: linear-gradient(135deg, #b71c1c, #d32f2f);
-  padding: 24px 24px 20px; text-align: center;
+h1,
+h2,
+p {
+  margin: 0;
 }
-.warning-icon { font-size: 48px; margin-bottom: 8px; }
-.warning-header h1 { color: #fff; font-size: 20px; margin: 0 0 4px; }
-.warning-subtitle { color: rgba(255,255,255,0.75); font-size: 12px; }
 
-/* ===== 风险摘要 ===== */
-.risk-summary { padding: 20px 24px; display: flex; align-items: center; gap: 16px;
-  background: #3e1a1a; border-bottom: 2px solid #c62828; }
-.risk-badge { text-align: center; flex-shrink: 0; }
-.risk-badge.danger { background: #c62828; color: #fff; padding: 12px 20px;
-  border-radius: 12px; }
-.risk-label { display: block; font-size: 11px; opacity: 0.85; }
-.risk-score { display: block; font-size: 36px; font-weight: 800; line-height: 1.1; }
-.risk-message strong { color: #ff5252; font-size: 14px; }
-.risk-message p { color: #ccc; font-size: 12px; margin-top: 4px; }
+.page {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 48px 24px;
+}
 
-/* ===== 信息区域 ===== */
-.info-section { padding: 16px 24px; background: #16213e; }
-.info-row { display: flex; justify-content: space-between; padding: 6px 0; font-size: 13px; }
-.info-label { color: #888; }
-.info-value { color: #e0e0e0; font-weight: 500; }
-.danger-text { color: #ff5252; }
+.warning-panel {
+  width: min(100%, 520px);
+  text-align: center;
+}
 
-/* ===== 官方网站 ===== */
-.official-section { margin: 12px 24px; padding: 16px; background: #1b3a1b;
-  border: 1px solid #4CAF50; border-radius: 8px; text-align: center; }
-.official-header { color: #4CAF50; font-weight: 600; font-size: 14px; margin-bottom: 6px; }
-.official-domain { color: #a5d6a7; font-size: 13px; word-break: break-all; margin-bottom: 10px; }
-.btn-official { display: inline-block; background: #4CAF50; color: #fff; padding: 10px 24px;
-  border-radius: 6px; text-decoration: none; font-weight: 600; font-size: 14px;
-  transition: background 0.2s; }
-.btn-official:hover { background: #388E3C; }
+.app-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
 
-/* ===== 安全建议 ===== */
-.tips-section { padding: 16px 24px; background: #16213e; margin: 12px 0; }
-.tips-section h3 { color: #ff9800; font-size: 14px; margin-bottom: 8px; }
-.tips-section ul { list-style: none; }
-.tips-section li { padding: 4px 0 4px 20px; font-size: 12px; color: #aaa;
-  position: relative; }
-.tips-section li::before { content:'•'; position:absolute; left:6px; color:#ff5252; font-weight:bold; }
+.app-mark img {
+  display: block;
+  border-radius: 7px;
+}
 
-/* ===== 底部按钮 ===== */
-.actions { padding: 16px 24px 8px; display: flex; gap: 12px; }
-.auto-close-countdown { padding: 0 24px 20px; text-align: center; color: #9e9e9e;
-  font-size: 12px; min-height: 16px; }
-.btn-secondary, .btn-primary { flex:1; padding: 10px 16px; border:none; border-radius: 6px;
-  font-size: 13px; font-weight: 600; cursor: pointer; transition: opacity 0.2s; }
-.btn-secondary { background: #333; color: #ccc; }
-.btn-secondary:hover { opacity: 0.85; }
-.btn-primary { background: #1565C0; color: #fff; }
-.btn-primary:hover { opacity: 0.9; }
+.warning-heading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  margin-top: 14px;
+}
 
-.report-actions { padding: 8px 24px 0; text-align: center; }
-.btn-report { background: transparent; border: 1px dashed #757575; color: #9e9e9e;
-  padding: 8px 16px; border-radius: 5px; font-size: 12px; cursor: pointer;
-  transition: all .15s; width: 100%; }
-.btn-report:hover { border-color: #FF9800; color: #FF9800; background: rgba(255,152,0,.08); }
-.btn-report:disabled { opacity: 0.6; cursor: not-allowed; }
+.risk-symbol {
+  display: grid;
+  flex: 0 0 50px;
+  place-items: center;
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  background: var(--red);
+  color: #ffffff;
+  font-size: 31px;
+  font-weight: 650;
+  line-height: 1;
+}
+
+h1 {
+  color: var(--text);
+  font-size: clamp(27px, 3.2vw, 32px);
+  font-weight: 650;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  text-align: left;
+  text-shadow: none;
+  filter: grayscale(1);
+}
+
+.message {
+  max-width: 450px;
+  margin: 16px auto 0;
+  color: var(--secondary);
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+.message strong,
+.dialog-content strong {
+  color: var(--text);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+  width: min(100%, 330px);
+  margin: 28px auto 0;
+}
+
+.button,
+.dialog-button {
+  min-height: 42px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 0 16px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.button-primary,
+.dialog-button-primary {
+  background: var(--blue);
+  color: #ffffff;
+}
+
+.button-secondary {
+  border-color: var(--border);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.trust-link {
+  margin: 14px auto 0;
+  border: 0;
+  padding: 6px 8px;
+  background: transparent;
+  color: var(--tertiary);
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.report-link {
+  display: block;
+  margin: 13px auto 0;
+  border: 0;
+  padding: 4px 6px;
+  background: transparent;
+  color: var(--tertiary);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.status {
+  min-height: 18px;
+  margin-top: 8px;
+  color: var(--red);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.trust-dialog {
+  width: min(390px, calc(100% - 24px));
+  max-width: none;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 0;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: none;
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity 140ms ease, transform 140ms var(--ease-out), overlay 140ms allow-discrete, display 140ms allow-discrete;
+}
+
+.trust-dialog::backdrop {
+  background: var(--scrim);
+}
+
+@starting-style {
+  .trust-dialog[open] {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+.dialog-content {
+  padding: 22px;
+  text-align: left;
+}
+
+.dialog-content h2 {
+  font-size: 20px;
+  font-weight: 650;
+  line-height: 1.3;
+  letter-spacing: -0.015em;
+}
+
+.dialog-content > p {
+  margin-top: 9px;
+  color: var(--secondary);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.dialog-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 20px;
+}
+
+.dialog-button {
+  min-height: 40px;
+  border-radius: 7px;
+  padding: 0 10px;
+  font-size: 13px;
+}
+
+.dialog-button-danger {
+  border-color: color-mix(in srgb, var(--red) 28%, var(--border));
+  background: var(--danger-soft);
+  color: var(--red);
+}
+
+.button:focus-visible,
+.dialog-button:focus-visible,
+.trust-link:focus-visible,
+.report-link:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+}
+
+.dialog-button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .button-primary:hover,
+  .dialog-button-primary:hover {
+    background: var(--blue-hover);
+  }
+
+  .button-secondary:hover {
+    background: var(--surface-muted);
+  }
+
+  .trust-link:hover {
+    color: var(--text);
+  }
+
+  .report-link:hover {
+    color: var(--blue);
+  }
+
+  .dialog-button-danger:hover {
+    background: var(--danger-soft-hover);
+  }
+}
+
+@media (max-width: 720px) {
+  .page {
+    padding: 36px 20px;
+  }
+
+  .warning-panel {
+    width: min(100%, 480px);
+  }
+
+  .warning-heading {
+    margin-top: 14px;
+  }
+
+  .actions {
+    width: min(100%, 340px);
+  }
+}
+
+@media (max-width: 420px) {
+  .page {
+    padding: 28px 20px;
+  }
+
+  .warning-heading {
+    gap: 11px;
+  }
+
+  .risk-symbol {
+    flex-basis: 44px;
+    width: 44px;
+    height: 44px;
+    font-size: 28px;
+  }
+
+  h1 {
+    font-size: 27px;
+  }
+
+  .message {
+    font-size: 14px;
+  }
+
+  .actions {
+    width: 100%;
+  }
+
+  .dialog-content {
+    padding: 20px;
+  }
+}
+
+@media (max-width: 350px) {
+  .page {
+    padding-inline: 16px;
+  }
+
+  .warning-heading {
+    gap: 9px;
+  }
+
+  h1 {
+    font-size: 25px;
+  }
+
+  .dialog-actions {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-height: 600px) {
+  .page {
+    place-items: start center;
+    padding-block: 28px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .button,
+  .dialog-button,
+  .trust-dialog {
+    transition-duration: 0.01ms;
+  }
+
+  .trust-dialog {
+    transform: none;
+  }
+}
+
+@media (prefers-contrast: more) {
+  .button-secondary,
+  .trust-dialog {
+    border-color: var(--text);
+  }
+}
