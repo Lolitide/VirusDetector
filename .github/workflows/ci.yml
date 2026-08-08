@@ -28,8 +28,31 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci
-      - name: Validate manifest and JavaScript
+      - name: Lint source (eslint)
         run: npm run check
+      # 构建产物
+      # 注意：先构建再跑测试——extension-safety 测试需读取真实构建产物 .output 中的 manifest
+      - name: Compute short commit SHA
+        id: sha
+        run: echo "short=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+      - name: Build Chromium extension (Chrome & Edge 通用)
+        run: npm run build:chrome
+      - name: Build Firefox extension
+        run: npm run build:firefox
+      - name: Run tests
+        run: npm test
+      - name: Upload Chromium artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: chromium-mv3-${{ steps.sha.outputs.short }}
+          path: .output/chrome-mv3
+          if-no-files-found: error
+      - name: Upload Firefox artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: firefox-mv3-${{ steps.sha.outputs.short }}
+          path: .output/firefox-mv3
+          if-no-files-found: error
 
   codeql:
     name: CodeQL analysis

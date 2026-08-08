@@ -17,11 +17,14 @@
 
 // ==================== 版本号（统一入口） ====================
 /**
- * 当前扩展版本号，用于 User-Agent 与上报载荷等展示性用途。
- * 注意：更新检测以 chrome.runtime.getManifest().version 为唯一真源，不依赖此常量；
- * 发版时仍需同步修改此处 + manifest.json + README（本常量已与 manifest 脱节过一次，见 v2.5.1）。
+ * 扩展版本号，用于 User-Agent、上报载荷、UI 展示等展示性用途。
+ * 运行时直接从 manifest 读取——manifest 版本由 wxt 根据发布 tag 自动派生，
+ * 因此 VERSION 自动跟随 tag，发版无需手改此处。
+ * 更新检测同样以 chrome.runtime.getManifest().version 为唯一真源。
+ * 非扩展环境（如 node 测试）无法访问 chrome.runtime，回退到基线版本。
  */
-export const VERSION = '2.5.2';
+export const VERSION =
+  globalThis.chrome?.runtime?.getManifest?.()?.version ?? '2.5.2';
 
 // ==================== 评分体系 ====================
 /** 触发警告的总分阈值（注入拦截 + 警告窗口 + 图标变红） */

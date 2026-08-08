@@ -63,7 +63,7 @@
 
 ```text
 VirusDetector/
-├── manifest.json                      # Manifest V3 扩展清单
+├── wxt.config.ts                     # wxt 构建配置（Manifest V3 清单由此生成，不再有静态 manifest.json）
 ├── package.json                       # 开发工具链配置
 ├── README.md
 ├── eslint.config.mjs                  # ESLint 平面配置

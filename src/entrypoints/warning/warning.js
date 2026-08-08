@@ -16,7 +16,7 @@
  */
 import {
   MSG_TYPES, REPORT_TYPES, WARNING_AUTO_CLOSE_SECONDS, PHISH_CONFIRM_TIMEOUT_MS
-} from '../utils/constants.js';
+} from '@utils/constants.js';
 
 (function () {
   'use strict';

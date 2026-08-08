@@ -1,3 +1,4 @@
+import '@utils/content-constants.js';
 /**
  * Virus Detector — Popup UI（工具栏弹窗控制器）
  *
@@ -23,7 +24,7 @@
 import {
   SCORE_THRESHOLD, DOWNLOAD_CONFIRM_THRESHOLD, MSG_TYPES, STORAGE_KEYS,
   REPORT_TYPES, UI_KEYS, GITHUB_REPO_PAGE, IDLE_TIMEOUT_MS, PHISH_CONFIRM_TIMEOUT_MS
-} from '../utils/constants.js';
+} from '@utils/constants.js';
 
 (function () {
   'use strict';
@@ -490,7 +491,7 @@ import {
   const settingsBtn = document.getElementById('settings-btn');
   if (settingsBtn) {
     settingsBtn.addEventListener('click', () => {
-      chrome.tabs.create({ url: chrome.runtime.getURL('options/options.html') });
+      chrome.tabs.create({ url: chrome.runtime.getURL('options.html') });
     });
   }
 

@@ -1226,14 +1226,14 @@ function openWarningWindow(tabState) {
   });
 
   chrome.windows.create({
-    url: chrome.runtime.getURL('warning/warning.html?' + params.toString()),
+    url: chrome.runtime.getURL('warning.html?' + params.toString()),
     type: 'popup',
     width: 480,
     height: 560,
     focused: true
   }).catch(() => {
     chrome.tabs.create({
-      url: chrome.runtime.getURL('warning/warning.html?' + params.toString())
+      url: chrome.runtime.getURL('warning.html?' + params.toString())
     }).catch(() => {});
   });
 }
@@ -2210,14 +2210,14 @@ function openDownloadConfirmation(tabState, downloadItem, fileName, downloadDoma
   });
 
   chrome.windows.create({
-    url: chrome.runtime.getURL('warning/download-confirm.html?' + params.toString()),
+    url: chrome.runtime.getURL('download-confirm.html?' + params.toString()),
     type: 'popup',
     width: 460,
     height: 580,
     focused: true
   }).catch(() => {
     chrome.tabs.create({
-      url: chrome.runtime.getURL('warning/download-confirm.html?' + params.toString())
+      url: chrome.runtime.getURL('download-confirm.html?' + params.toString())
     }).catch(() => {});
   });
 }

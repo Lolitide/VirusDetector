@@ -20,3 +20,8 @@ AUDIT_REPORT.md
 # node modules
 node_modules/
 dist/
+
+# wxt build output
+.output/
+.wxt/
+.web-extension-id

@@ -1,3 +1,4 @@
+import '@utils/content-constants.js';
 /**
  * Virus Detector — 设置页控制器
  *
@@ -18,13 +19,13 @@
  * @module options
  */
 
-import { SETTINGS_DEFAULTS, SECTIONS, SENSITIVITY_PRESETS, SCHEMA_VERSION, validateSetting, migrateSettings } from '../utils/settings-schema.js';
-import { normalizeWhitelistEntry } from '../utils/whitelist-matcher.js';
+import { SETTINGS_DEFAULTS, SECTIONS, SENSITIVITY_PRESETS, SCHEMA_VERSION, validateSetting, migrateSettings } from '@utils/settings-schema.js';
+import { normalizeWhitelistEntry } from '@utils/whitelist-matcher.js';
 import {
   STORAGE_KEYS, MSG_TYPES, VERSION, UPDATE_CHANNEL,
   UI_KEYS, ADVANCED_ONLY_SECTIONS, PRESET_LEVELS,
   TOAST_DURATION_MS, GITHUB_REPO_PAGE, GITHUB_NEW_ISSUE_URL, GITHUB_RELEASES_PAGE
-} from '../utils/constants.js';
+} from '@utils/constants.js';
 
 /** 设置页主控制器：持有运行时设置状态，提供加载/渲染/保存、模式切换、预设应用等交互逻辑 */
 class SettingsApp {

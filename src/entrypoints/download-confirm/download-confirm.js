@@ -19,7 +19,7 @@
  */
 import {
   MSG_TYPES, REPORT_TYPES, DOWNLOAD_CONFIRM_ACTIONS, CONFIRM_AUTO_CLOSE_SECONDS
-} from '../utils/constants.js';
+} from '@utils/constants.js';
 
 (function () {
   'use strict';

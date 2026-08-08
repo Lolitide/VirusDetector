@@ -5,13 +5,20 @@
   "type": "module",
   "description": "Development tooling for the Virus Detector browser extension",
   "scripts": {
+    "dev": "wxt",
+    "build": "wxt build",
+    "build:chrome": "wxt build -b chrome",
+    "build:edge": "wxt build -b edge",
+    "build:firefox": "wxt build -b firefox --mv3",
+    "zip": "wxt zip",
     "lint": "eslint --max-warnings=0 .",
-    "check:manifest": "node -e \"JSON.parse(require('node:fs').readFileSync('manifest.json', 'utf8'))\"",
-    "check": "npm run check:manifest && npm run lint",
+    "check": "npm run lint",
     "test": "node --test tests/domain-database.test.mjs tests/extension-safety.test.mjs tests/report-privacy.test.mjs tests/constants-sync.test.mjs tests/exemptions-consistency.test.mjs tests/scoring-linkage.test.mjs tests/cache-manager.test.mjs tests/injection-function.test.mjs"
   },
   "devDependencies": {
     "eslint": "^9.31.0",
-    "globals": "^16.3.0"
+    "globals": "^16.3.0",
+    "wxt": "^0.21.3",
+    "web-ext": "^9.2.0"
   }
 }

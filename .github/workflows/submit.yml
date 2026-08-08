@@ -1,0 +1,167 @@
+# 构建并提交 Virus Detector 到 Edge 和 Firefox 商店。
+#
+# 通过推送类似 `v*` 的标签触发，例如：
+# git tag v2.5.3
+# git push origin v2.5.3
+#
+# 所需的 GitHub 仓库密钥（Settings → Secrets and variables → Actions）：
+# Firefox (AMO)：
+# AMO_API_KEY – AMO "API 密钥"（来自 addons.mozilla.org → Manage → Credentials）
+# AMO_API_SECRET – AMO "API 密钥"
+# Edge 插件：
+# EDGE_PRODUCT_ID – Edge 插件产品/扩展 ID
+# EDGE_CLIENT_ID – 为 Edge API 注册的 Azure AD 应用（客户端）ID
+# EDGE_CLIENT_SECRET – Azure AD 应用客户端密钥
+# EDGE_TENANT_ID – Azure AD 租户 ID
+#
+# 注意：Edge 插件 REST API 的协议在 Partner Center 各版本间有所变化。
+# 下面的 submit-edge 任务使用当前文档中的流程（token → draft → upload → commit）。
+# 如果微软更改了接口，请调整 curl 调用；Firefox（web-ext）流程稳定。
+name: Build & Submit to Stores
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.browser }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chrome, edge, firefox]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build extension
+        run: |
+          if [ "${{ matrix.browser }}" = "firefox" ]; then
+            npx wxt build -b firefox --mv3
+          else
+            npx wxt build -b ${{ matrix.browser }}
+          fi
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.browser }}-mv3
+          path: .output/${{ matrix.browser }}-mv3
+          if-no-files-found: error
+
+  submit-firefox:
+    name: Submit to Firefox (AMO)
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Download Firefox build
+        uses: actions/download-artifact@v4
+        with:
+          name: firefox-mv3
+          path: firefox-mv3
+
+      - name: Sign & submit to AMO
+        env:
+          AMO_API_KEY: ${{ secrets.AMO_API_KEY }}
+          AMO_API_SECRET: ${{ secrets.AMO_API_SECRET }}
+        run: |
+          npx web-ext sign \
+            --source-dir firefox-mv3 \
+            --api-key "$AMO_API_KEY" \
+            --api-secret "$AMO_API_SECRET" \
+            --channel listed
+
+  submit-edge:
+    name: Submit to Edge Add-ons
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Download Edge build
+        uses: actions/download-artifact@v4
+        with:
+          name: edge-mv3
+          path: edge-mv3
+
+      - name: Package & submit to Edge Add-ons
+        env:
+          EDGE_PRODUCT_ID: ${{ secrets.EDGE_PRODUCT_ID }}
+          EDGE_CLIENT_ID: ${{ secrets.EDGE_CLIENT_ID }}
+          EDGE_CLIENT_SECRET: ${{ secrets.EDGE_CLIENT_SECRET }}
+          EDGE_TENANT_ID: ${{ secrets.EDGE_TENANT_ID }}
+        run: |
+          set -euo pipefail
+          cd edge-mv3 && zip -r ../edge.zip . && cd ..
+
+          TOKEN=$(curl -sf -X POST \
+            "https://login.microsoftonline.com/${EDGE_TENANT_ID}/oauth2/v2.0/token" \
+            -d "grant_type=client_credentials" \
+            -d "client_id=${EDGE_CLIENT_ID}" \
+            -d "client_secret=${EDGE_CLIENT_SECRET}" \
+            -d "scope=https://api.addons.microsoft.com/.default" | jq -r .access_token)
+
+          if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
+            echo "::error::Failed to obtain Edge access token"
+            exit 1
+          fi
+
+          # 创建（或获取）一个草稿提交
+          SUBID=$(curl -sf -X POST \
+            "https://api.addons.microsoft.com/v1/products/${EDGE_PRODUCT_ID}/submissions/draft" \
+            -H "Authorization: Bearer $TOKEN" | jq -r .id)
+
+          if [ -z "$SUBID" ] || [ "$SUBID" = "null" ]; then
+            echo "::error::Failed to create Edge draft submission"
+            exit 1
+          fi
+
+          echo "Created Edge draft submission: $SUBID"
+
+          # 上传打包好的扩展 (fail loudly on non-2xx)
+          UP=$(curl -s -o /tmp/edge_upload.json -w "%{http_code}" -X POST \
+            "https://api.addons.microsoft.com/v1/products/${EDGE_PRODUCT_ID}/submissions/${SUBID}/upload" \
+            -H "Authorization: Bearer $TOKEN" \
+            -F "file=@edge.zip")
+          if [ "$UP" -lt 200 ] || [ "$UP" -ge 300 ]; then
+            echo "::error::Edge upload failed (HTTP $UP)"; cat /tmp/edge_upload.json; exit 1
+          fi
+
+          # 提交 / 发布草稿 (fail loudly on non-2xx)
+          CM=$(curl -s -o /tmp/edge_commit.json -w "%{http_code}" -X PUT \
+            "https://api.addons.microsoft.com/v1/products/${EDGE_PRODUCT_ID}/submissions/draft" \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"id\":\"$SUBID\"}")
+          if [ "$CM" -lt 200 ] || [ "$CM" -ge 300 ]; then
+            echo "::error::Edge commit failed (HTTP $CM)"; cat /tmp/edge_commit.json; exit 1
+          fi
+
+          echo "Edge submission committed for product ${EDGE_PRODUCT_ID}"
