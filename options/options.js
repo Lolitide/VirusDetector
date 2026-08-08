@@ -727,9 +727,28 @@ class SettingsApp {
       const keysToRemove = Object.keys(all).filter(k =>
         k.startsWith(STORAGE_KEYS.DOMAIN_CACHE) || k.startsWith(STORAGE_KEYS.ICP_CACHE_PREFIX)
       );
+      let cleared = keysToRemove.length;
       if (keysToRemove.length > 0) {
         await chrome.storage.local.remove(keysToRemove);
-        this._showToast(`已清除 ${keysToRemove.length} 条缓存记录`, 'success');
+      }
+      // 标签页状态缓存位于 session 存储，一并清除（不占用 local 配额）；
+      // Firefox(<142) 无 session 时 tabState 存于 local，此时从 local 清除
+      if (chrome.storage && chrome.storage.session) {
+        const sessionAll = await chrome.storage.session.get(null);
+        const sessionKeys = Object.keys(sessionAll).filter(k => k.startsWith(STORAGE_KEYS.TAB_STATE_PREFIX));
+        if (sessionKeys.length > 0) {
+          await chrome.storage.session.remove(sessionKeys);
+          cleared += sessionKeys.length;
+        }
+      } else {
+        const localTabStateKeys = Object.keys(all).filter(k => k.startsWith(STORAGE_KEYS.TAB_STATE_PREFIX));
+        if (localTabStateKeys.length > 0) {
+          await chrome.storage.local.remove(localTabStateKeys);
+          cleared += localTabStateKeys.length;
+        }
+      }
+      if (cleared > 0) {
+        this._showToast(`已清除 ${cleared} 条缓存记录`, 'success');
       } else {
         this._showToast('没有需要清除的缓存', 'info');
       }
@@ -749,6 +768,10 @@ class SettingsApp {
         await chrome.storage.local.remove(keysToRemove);
       }
       await chrome.storage.local.remove(STORAGE_KEYS.GLOBAL_SETTINGS);
+      // 清空 session 存储（标签页状态等临时数据）
+      if (chrome.storage && chrome.storage.session) {
+        await chrome.storage.session.clear().catch(() => {});
+      }
       this.settings = { ...SETTINGS_DEFAULTS };
       this._presetOverrides = {};
       this._renderSection(this._activeSection);
@@ -1493,7 +1516,15 @@ SettingsApp.prototype._loadStorageStats = async function () {
     const icpApiCacheKeys = Object.keys(all).filter(k =>
       k.startsWith(STORAGE_KEYS.ICP_CACHE_PREFIX)
     );
-    const tabStateKeys = Object.keys(all).filter(k => k.startsWith(STORAGE_KEYS.TAB_STATE_PREFIX));
+    // 标签页状态已迁移至 chrome.storage.session（不占用 local 配额）；
+    // Firefox(<142) 无 session 时回退 local，此时从 local 统计
+    let tabStateKeys = [];
+    if (chrome.storage && chrome.storage.session) {
+      const sessionAll = await chrome.storage.session.get(null);
+      tabStateKeys = Object.keys(sessionAll).filter(k => k.startsWith(STORAGE_KEYS.TAB_STATE_PREFIX));
+    } else {
+      tabStateKeys = Object.keys(all).filter(k => k.startsWith(STORAGE_KEYS.TAB_STATE_PREFIX));
+    }
     const whitelist = all[STORAGE_KEYS.WHITELIST] || [];
     const blacklist = all[STORAGE_KEYS.DOWNLOAD_BLACKLIST] || [];
     const siteBlacklist = all[STORAGE_KEYS.SITE_BLACKLIST] || [];
@@ -1511,7 +1542,7 @@ SettingsApp.prototype._loadStorageStats = async function () {
       </div>
       <div class="about-row"><span class="about-label">缓存记录</span><span class="about-value">${cacheKeys.length} 条</span></div>
       <div class="about-row"><span class="about-label">ICP API 缓存</span><span class="about-value">${icpApiCacheKeys.length} 条</span></div>
-      <div class="about-row"><span class="about-label">标签页状态</span><span class="about-value">${tabStateKeys.length} 个</span></div>
+      <div class="about-row"><span class="about-label">标签页状态</span><span class="about-value">${tabStateKeys.length} 个${chrome.storage && chrome.storage.session ? '（session）' : ''}</span></div>
       <div class="about-row"><span class="about-label">白名单域名</span><span class="about-value">${Array.isArray(whitelist) ? whitelist.length : 0} 个</span></div>
       <div class="about-row"><span class="about-label">站点黑名单</span><span class="about-value">${typeof siteBlacklist === 'object' ? Object.keys(siteBlacklist).length : 0} 条</span></div>
       <div class="about-row"><span class="about-label">下载黑名单</span><span class="about-value">${typeof blacklist === 'object' ? Object.keys(blacklist).length : 0} 条</span></div>

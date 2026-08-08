@@ -42,6 +42,16 @@
   // 派生（与 constants.js FILE_EXTENSIONS 同法，保证永不漂移）
   C.FILE_EXTENSIONS = Array.from(new Set(C.ARCHIVE_EXTENSIONS.concat(C.EXECUTABLE_EXTENSIONS)));
 
+  // ==================== 2.5 可信外链域名（与 constants.js TRUSTED_EXTERNAL_DOMAINS 一致） ====================
+  C.TRUSTED_EXTERNAL_DOMAINS = [
+    // 代码托管
+    'github.com', 'github.io', 'gist.github.com', 'gitee.com', 'gitlab.com',
+    'gitcode.com', 'coding.net', 'bitbucket.org', 'sourceforge.net',
+    // 文档 / 标准 / 学术
+    'readthedocs.io', 'readthedocs.org', 'docs.rs', 'mozilla.org',
+    'developer.mozilla.org', 'w3.org', 'arxiv.org', 'doi.org'
+  ];
+
   // ==================== 3. 关键词（并集） ====================
   C.PROMO_KEYWORDS = [
     // 中文关键词
