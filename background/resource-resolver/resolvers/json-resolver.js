@@ -10,7 +10,7 @@ import { BaseResolver } from './base-resolver.js';
 import {
   RESOURCE_TYPES, SOURCE_TYPES,
   ARCHIVE_URL_PATTERN, URL_PATTERN,
-  MAX_JSON_SIZE
+  MAX_JSON_SIZE, JSON_MAX_DEPTH, JSON_MAX_KEYS, JSON_MIN_URL_LENGTH
 } from '../config.js';
 
 export class JsonResolver extends BaseResolver {
@@ -41,7 +41,6 @@ export class JsonResolver extends BaseResolver {
     const rawPageUrl = node.parentUrl || context.pageUrl;
     const foundUrls = new Set();
 
-    // 从原始文本匹配
     ARCHIVE_URL_PATTERN.lastIndex = 0;
     let aMatch;
     while ((aMatch = ARCHIVE_URL_PATTERN.exec(content)) !== null) {
@@ -49,7 +48,6 @@ export class JsonResolver extends BaseResolver {
       if (absoluteUrl) foundUrls.add(absoluteUrl);
     }
 
-    // 尝试 JSON.parse 并递归遍历值
     try {
       const parsed = JSON.parse(content);
       this._extractUrlsFromValue(parsed, foundUrls, rawPageUrl);
@@ -96,11 +94,11 @@ export class JsonResolver extends BaseResolver {
    * 递归遍历 JSON 值，提取 URL 字符串
    */
   _extractUrlsFromValue(value, urlSet, baseUrl, depth = 0) {
-    if (depth > 10) return; // 防止深层嵌套
+    if (depth > JSON_MAX_DEPTH) return;
 
     if (typeof value === 'string') {
       // 检查是否像 URL
-      if (value.length > 10 && /^https?:\/\//.test(value)) {
+      if (value.length > JSON_MIN_URL_LENGTH && /^https?:\/\//.test(value)) {
         const absoluteUrl = this.resolveUrl(value, baseUrl);
         if (absoluteUrl) {
           const { isArchive, isExecutable } = this.classifyUrl(absoluteUrl);
@@ -122,8 +120,7 @@ export class JsonResolver extends BaseResolver {
       }
     } else if (value && typeof value === 'object') {
       const keys = Object.keys(value);
-      // 限制：最多遍历 50 个 key
-      for (let i = 0; i < Math.min(keys.length, 50); i++) {
+      for (let i = 0; i < Math.min(keys.length, JSON_MAX_KEYS); i++) {
         this._extractUrlsFromValue(value[keys[i]], urlSet, baseUrl, depth + 1);
       }
     }

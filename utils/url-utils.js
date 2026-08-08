@@ -13,6 +13,8 @@
 
 // ==================== PSL 缓存与回退 ====================
 
+import { PSL_DOH_URL, PSL_DNS_TIMEOUT_MS } from './constants.js';
+
 /** @type {Map<string, string>} hostname -> public suffix 缓存（由 DoH 异步查询填充） */
 const _pslCache = new Map();
 
@@ -34,6 +36,8 @@ const _FALLBACK_TLD = new Set([
   'mx', 'ca', 'us', 'th', 'vn', 'ph', 'my', 'id', 'pk', 'bd',
   // 常见多级公共后缀（DNS 不可用时的回退，覆盖最常用的场景）
   'com.cn', 'net.cn', 'org.cn', 'gov.cn', 'edu.cn', 'ac.cn',
+  // 全国34个省市自治区 地域cn后缀https://domain.miit.gov.cn/chinayu.jsp
+  'bj.cn', 'tj.cn', 'sh.cn', 'cq.cn', 'he.cn', 'sx.cn', 'nm.cn', 'ln.cn', 'jl.cn', 'hl.cn', 'js.cn', 'zj.cn', 'ah.cn', 'fj.cn', 'jx.cn', 'sd.cn', 'ha.cn', 'hb.cn', 'hn.cn', 'gd.cn', 'gx.cn', 'hi.cn', 'sc.cn', 'gz.cn', 'yn.cn', 'xz.cn', 'sn.cn', 'gs.cn', 'qh.cn', 'nx.cn', 'xj.cn', 'tw.cn', 'hk.cn', 'mo.cn',
   'co.uk', 'org.uk', 'ac.uk', 'gov.uk', 'me.uk', 'net.uk',
   'co.jp', 'or.jp', 'ne.jp', 'ac.jp', 'go.jp',
   'co.kr', 'or.kr', 'ne.kr', 'go.kr',
@@ -71,9 +75,8 @@ function getPublicSuffix(hostname) {
     // 回退到 fallback（不淘汰缓存，不影响未来的查询策略变化）
   }
 
-  // 2. 回退匹配：从最右段开始逐级向左扩展，找到 PSL 中最长的连续匹配
-  //    例如 xxx.com.cn: cn✓ → com.cn✗(不在回退集) → 返回 cn
-  //    若回退集包含 com.cn 则: cn✓ → com.cn✓ → xxx.com.cn✗ → 返回 com.cn
+  // 2. 回退匹配：从最右段开始逐级向左扩展，找到 _FALLBACK_TLD 中最长的连续匹配
+  //    例如 xxx.com.cn: cn✓ → com.cn✓ → xxx.com.cn✗（不在集）→ 返回 com.cn
   const parts = hostname.split('.');
   let publicSuffix = parts[parts.length - 1] || ''; // 起始至少匹配 TLD
   for (let len = 2; len <= parts.length; len++) {
@@ -135,11 +138,12 @@ function extractRegistrableDomain(hostname) {
  */
 export async function refreshPublicSuffixDNS(hostname) {
   const queryName = `${hostname}.query.publicsuffix.zone`;
-  const url = `https://dns.google/resolve?name=${encodeURIComponent(queryName)}&type=PTR`;
+  // DoH 端点来自 constants.js PSL_DOH_URL（前缀形式，此处拼 query 参数）
+  const url = `${PSL_DOH_URL}${encodeURIComponent(queryName)}&type=PTR`;
 
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
+    const timeoutId = setTimeout(() => controller.abort(), PSL_DNS_TIMEOUT_MS);
 
     const response = await fetch(url, { signal: controller.signal });
     clearTimeout(timeoutId);

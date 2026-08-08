@@ -23,15 +23,21 @@
  *     不引入新的误报或漏报
  *
  * @module icp-api
+ *
+ * 前置条件：
+ *   - 运行于扩展 Service Worker：需 chrome.storage.local 与 fetch 均可用
+ *   - 调用时机：评分引擎规则三评估时由 service-worker.js 异步调用
+ *     IcpApiClient.query()，结果经 _applyIcpUpdate 增量修正评分
  */
 
-import { UrlUtils } from '../utils/url-utils.js';
-import { ICP_API_CONFIG, VERSION } from '../utils/constants.js';
+import { ICP_API_CONFIG, STORAGE_KEYS, VERSION } from '../utils/constants.js';
 
 // ==================== 缓存与限流 ====================
 
-const ICP_API_CACHE_PREFIX = 'icp_api_v1_';
+const ICP_API_CACHE_PREFIX = STORAGE_KEYS.ICP_CACHE_PREFIX;
 const _memCache = new Map();
+// 运行时注册的自定义 provider（constants.js 的 ICP_API_CONFIG 已深冻结，不可再 push）
+const _runtimeProviders = [];
 // per-provider 限流窗口：name -> 最近请求时间戳数组
 const _rateWindows = new Map();
 
@@ -103,14 +109,17 @@ export class IcpApiClient {
     // 总开关：设置中关闭 API 核验时直接跳过（调用方回退页面文本扫描）
     if (opts.enabled === false) return { queried: false, hasIcp: false, error: 'api disabled' };
 
-    const domain = UrlUtils.getMainDomain(hostname) || hostname.toLowerCase();
+    const domain = hostname.toLowerCase();
 
     // 命中缓存直接返回
     const cached = await readCache(domain);
     if (cached) return cached;
 
-    // 支持通过 opts.providers 覆盖数据源（如设置页关闭某个 provider 后的有效列表）
-    const providers = Array.isArray(opts.providers) ? opts.providers : ICP_API_CONFIG.providers;
+    // 支持通过 opts.providers 覆盖数据源（如设置页关闭某个 provider 后的有效列表）；
+    // 默认 = 内置静态 providers + 运行时注册的 provider
+    const providers = Array.isArray(opts.providers)
+      ? opts.providers
+      : [...ICP_API_CONFIG.providers, ..._runtimeProviders];
 
     for (const provider of providers) {
       if (!provider.enabled) continue;                 // 未启用
@@ -173,11 +182,13 @@ export class IcpApiClient {
 
   /**
    * 供设置面板/动态注入额外 provider（如用户自有备案查询接口）。
+   * 注意：constants.js 的 ICP_API_CONFIG.providers 已深冻结，注册进模块级
+   * _runtimeProviders 列表，query() 时与内置 providers 合并使用。
    * @param {Object} provider - 符合 ICP_API_CONFIG.providers 元素的对象
    */
   static registerProvider(provider) {
     if (provider && typeof provider.buildUrl === 'function' && typeof provider.parse === 'function') {
-      ICP_API_CONFIG.providers.push(provider);
+      _runtimeProviders.push(provider);
     }
   }
 }

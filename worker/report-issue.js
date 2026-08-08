@@ -14,7 +14,7 @@
  * API：
  *   POST /api/report
  *   Content-Type: application/json
- *   Body: { reportType, domain, score, version, timestamp, note, ruleResults, url }
+ *   Body: { reportType, domain, score, version, timestamp, note, ruleResults }
  *   Response: { success: true, issueUrl: "https://github.com/.../issues/123" }
  *
  *   GET /api/version
@@ -26,6 +26,10 @@
  */
 
 // ---- 配置 ----
+// ⚠️ 本 Worker 独立部署（wrangler deploy），无法 import 扩展的 utils/constants.js。
+// 下列值须与 utils/constants.js 保持一致：
+//   GITHUB_RELEASES_API        ↔ constants.js GITHUB_RELEASES_API_URL
+//   LABEL_MAP 键（false_positive/confirmed_phish）↔ constants.js REPORT_TYPES
 const GITHUB_REPO_OWNER = 'Lolitide';
 const GITHUB_REPO_NAME = 'VirusDetector';
 const GITHUB_RELEASES_API = `https://api.github.com/repos/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/releases/latest`;
@@ -38,6 +42,17 @@ const VERSION_CACHE_TTL_MS = 60 * 60 * 1000;
 const LABEL_MAP = {
   'false_positive': ['false-positive', '用户上报'],
   'confirmed_phish': ['confirmed-phish', '用户上报']
+};
+
+const REPORT_RULES = {
+  rule1: '域名仿冒',
+  rule2: '下载检测',
+  rule3: 'ICP备案',
+  rule4: '链接分析',
+  rule5: '代码工程化',
+  domainAge: '域名年龄',
+  ageBonus: '域名减分',
+  downloadLink: '下载链接'
 };
 
 // ---- 环境变量校验 ----
@@ -84,7 +99,6 @@ function versionErrorResponse(status, message) {
   });
 }
 
-/** 写入边缘缓存（记录抓取时间与 GitHub ETag）并返回响应 */
 function cacheAndRespond(ctx, cache, body, etag) {
   // 注意：存入 Cache API 的响应不能带 Cache-Control: no-store（Cloudflare 会拒绝写入），
   // 因此缓存副本与返回给客户端的响应分别构造。
@@ -131,7 +145,6 @@ async function handleVersion(ctx) {
     }
   }
 
-  // 缓存过期或不存在，刷新上游
   const headers = {
     'Accept': 'application/vnd.github+json',
     'User-Agent': 'VirusDetector-Version-Check/1.0'
@@ -149,7 +162,6 @@ async function handleVersion(ctx) {
     return versionErrorResponse(502, `GitHub 请求失败: ${e.message}`);
   }
 
-  // 内容未变：仅刷新缓存时间戳
   if (resp.status === 304 && cachedBody) {
     return cacheAndRespond(ctx, cache, cachedBody, cachedEtag);
   }
@@ -182,7 +194,6 @@ async function handleVersion(ctx) {
 // ---- 域名校验 ----
 function isValidDomain(domain) {
   if (!domain || typeof domain !== 'string') return false;
-  // 基本域名格式校验
   return /^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)+$/.test(domain);
 }
 
@@ -193,9 +204,9 @@ function buildTitle(reportType, domain) {
 }
 
 // ---- 构建 Issue Body ----
-function buildBody(data) {
+export function buildBody(data) {
   const {
-    reportType, domain, score, version, timestamp, note, ruleResults, url
+    reportType, domain, score, version, timestamp, note, ruleResults
   } = data;
 
   const typeLabel = reportType === 'false_positive' ? '误报' : '确认钓鱼';
@@ -207,30 +218,13 @@ function buildBody(data) {
   body += `| 字段 | 值 |\n|------|----|\n`;
   body += `| 类型 | ${typeLabel} |\n`;
   body += `| 域名 | \`${domain}\` |\n`;
-  if (url) body += `| 页面URL | ${url} |\n`;
   body += `| 风险评分 | ${score ?? '未知'} |\n`;
   body += `| 版本 | ${version ?? '未知'} |\n`;
   body += `| 时间 | ${timeStr} |\n`;
 
-  // 检测详情
-  if (ruleResults) {
-    body += '\n## 检测详情\n\n';
-    body += '| 规则 | 结果 | 得分 |\n|------|------|------|\n';
-    const ruleNames = {
-      rule1: '域名仿冒', rule2: '下载检测', rule3: 'ICP备案',
-      rule4: '链接分析', rule5: '代码工程化',
-      domainAge: '域名年龄', ageBonus: '域名减分', downloadLink: '下载链接'
-    };
-    for (const [key, label] of Object.entries(ruleNames)) {
-      const rule = ruleResults[key];
-      if (!rule) continue;
-      const result = rule.detailCN || rule.detail || '-';
-      const score = rule.score != null ? (rule.score > 0 ? `+${rule.score}` : rule.score) : '-';
-      body += `| ${label} | ${result} | ${score} |\n`;
-    }
-  }
+  const ruleDetails = buildSafeRuleDetails(ruleResults);
+  if (ruleDetails) body += ruleDetails;
 
-  // 用户备注
   if (note) {
     body += `\n## 用户备注\n\n${note}\n`;
   }
@@ -239,6 +233,31 @@ function buildBody(data) {
   body += `<sub>🤖 由 Virus Detector 扩展自动上报 | v${version || '?'}</sub>\n`;
 
   return body;
+}
+
+function buildSafeRuleDetails(ruleResults) {
+  if (!ruleResults || typeof ruleResults !== 'object') return '';
+
+  let rows = '';
+  for (const [key, label] of Object.entries(REPORT_RULES)) {
+    const rule = ruleResults[key];
+    if (!rule || typeof rule !== 'object') continue;
+
+    const score = Number.isFinite(rule.score)
+      ? (rule.score > 0 ? `+${rule.score}` : String(rule.score))
+      : '-';
+    let result = rule.status === 'disabled'
+      ? '已关闭'
+      : (rule.triggered === true ? '已触发' : '未触发');
+
+    if (key === 'domainAge' && Number.isSafeInteger(rule.creationDays) && rule.creationDays >= 0) {
+      result = `已注册 ${rule.creationDays} 天`;
+    }
+
+    rows += `| ${label} | ${result} | ${score} |\n`;
+  }
+
+  return rows ? `\n## 检测详情\n\n| 规则 | 结果 | 得分 |\n|------|------|------|\n${rows}` : '';
 }
 
 // ---- 调用 GitHub Issues API ----
@@ -271,7 +290,6 @@ async function createGitHubIssue(token, title, body, labels) {
 
 // ---- 主处理 ----
 async function handleReport(request) {
-  // 仅接受 POST
   if (request.method !== 'POST') {
     return new Response(JSON.stringify({ success: false, error: '仅支持 POST 请求' }), {
       status: 405,
@@ -279,7 +297,6 @@ async function handleReport(request) {
     });
   }
 
-  // 解析 body
   let data;
   try {
     data = await request.json();
@@ -290,7 +307,6 @@ async function handleReport(request) {
     });
   }
 
-  // 校验必填字段
   const { reportType, domain } = data;
   if (!reportType || !['false_positive', 'confirmed_phish'].includes(reportType)) {
     return new Response(JSON.stringify({ success: false, error: 'reportType 无效' }), {
@@ -342,17 +358,14 @@ async function handleReport(request) {
 // ---- Worker 入口 ----
 export default {
   async fetch(request, env, ctx) {
-    // 注入环境变量到全局
     globalThis.GITHUB_TOKEN = env.GITHUB_TOKEN;
 
     const url = new URL(request.url);
 
-    // CORS 预检
     if (request.method === 'OPTIONS') {
       return handleOptions();
     }
 
-    // 路由
     if (url.pathname === '/api/report') {
       return handleReport(request);
     }
@@ -363,7 +376,6 @@ export default {
       return handleVersion(ctx);
     }
 
-    // 404
     return new Response(JSON.stringify({ error: 'Not Found' }), {
       status: 404,
       headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }

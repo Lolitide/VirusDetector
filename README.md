@@ -3,7 +3,7 @@
 > Chrome/Edge 浏览器扩展，实时检测银狐木马（Silver Fox Trojan）钓鱼与仿冒网站。
 
 [![Manifest](https://img.shields.io/badge/Manifest-V3-blue)](https://developer.chrome.com/docs/extensions/mv3/)
-[![Version](https://img.shields.io/badge/Version-2.5.1-orange)](https://github.com)
+[![Version](https://img.shields.io/badge/Version-2.5.2-orange)](https://github.com)
 
 ---
 
@@ -13,11 +13,11 @@
 
 | 规则 | 最高加分 | 检测内容 |
 | ---- | -------- | -------- |
-| 域名仿冒 | **60** | 4 类匹配策略 + 去连字符二次检测（精确段匹配、子串包含、关键词堆叠、约束编辑距离） |
+| 域名仿冒 | **60** | 分级嫌疑（STRONG/WEAK）+ 多特征联动评分（形近混淆、拼音变体、typosquat、title 声称、ICP、域名年龄） |
 | 压缩包下载 | **40** | 两阶段检测：Phase A 主动扫描页面跨域压缩包链接（上限 30 分）+ Phase B 实际下载拦截（上限 40 分） |
-| ICP 备案缺失 | **50** | 对所有网站检测 ICP 备案号（含 beian.gov.cn 等政府链接提取） |
+| ICP 备案缺失 | **50** | 对所有网站检测 ICP 备案号（含 beian.gov.cn 等政府链接提取）；无备案分支按可信档案联动降权（老域名/未声称品牌/开源可信信号可降至 10） |
 | 链接分析 | **70** | Part A（同页链接/死链/重复链接）+ Part B（下载按钮/压缩包链接） |
-| 代码工程化 | **60** | 结构信号组合判定（DOM复杂度+框架检测+外部资源+异常JS引用），2信号+20，≥3信号+30；推广页Emoji密度检测最高+20 |
+| 代码工程化 | **60** | 结构信号组合判定（DOM复杂度+框架检测+外部资源+异常JS引用），2信号+20，≥3信号+30；可信档案下减半，AI 可信特征（meta generator+可信外链）归零；推广页Emoji密度检测最高+20 |
 | 域名年龄评分 | **60** | 基于 RDAP 协议（RFC 9083）的 S 型衰减函数计分，新注册域名更可疑 |
 | 域名年龄减分 | **-20** | 注册时间长的域名可抵消部分可疑分数（条件：当前分数 ≥ 20） |
 | 下载链接跨域 | **30** | 跨域下载 +10，下载域名命中黑名单 +20，新注册域名额外 +10 |
@@ -115,8 +115,9 @@ VirusDetector/
 │   ├── download-confirm.css           # 下载确认窗口样式
 │   └── download-confirm.js            # 下载确认控制
 ├── utils/
-│   ├── constants.js                   # 评分常量、阈值配置
-│   ├── settings-schema.js             # 设置系统单一事实来源
+│   ├── constants.js                   # 全局常量唯一真源（评分阈值、扩展名并集、消息/存储键、超时、URL）
+│   ├── content-constants.js           # 经典脚本常量镜像（content_scripts/首帧同步脚本经 window.VT_CONSTANTS 读取）
+│   ├── settings-schema.js             # 设置系统单一事实来源（默认值由 constants.js 派生）
 │   ├── url-utils.js                   # 域名解析、PSL 主域提取
 │   ├── trusted-platforms.js           # 可信 UGC 平台白名单
 │   ├── trusted-download-hosts.js      # 可信下载平台白名单
@@ -145,17 +146,38 @@ VirusDetector/
 
 ### 防御策略
 
-#### 1. 域名仿冒检测（规则一 | 60 分）
+#### 1. 域名仿冒检测（规则一 | 封顶 60 分）
 
-采用 4 类匹配策略，并对含 `-` / `_` 的域名执行去连字符二次检测；任一策略命中即判定为仿冒：
+采用**分级嫌疑 + 多特征联动评分**，取代原「任一策略命中即 +60」的硬处理：
 
 ```text
-规则 A   精确段匹配     → deepseek-go.com 拆分为 [deepseek, go, com] → "deepseek" 精确命中
-规则 B   标签子串包含   → pc-huorong.com.cn 的标签包含 "huorong" → 命中（关键词 ≥ 5 字符）
-规则 C   关键词堆叠     → google-google-cn-google.hl.cn → "google" 在段中出现 ≥ 3 次
-规则 D   约束编辑距离   → firefpx.com 与 "firefox" 距离 ≤ 2 且长度差 ≤ 2 → 命中
-二次检测 去连字符重试   → team-viewer.us 去除连字符后按 A/B/C 重试
+STRONG（高置信嫌疑，基础 45 分）
+  S1 强关键词精确段匹配  → deepseek-login.com 段 "deepseek" 精确命中（kw ≥ 6）
+  S2 官方注册域标签段    → qianwenai-x.com 段 "qianwenai" 等于官方注册域标签
+  S3 形近字符混淆        → a1ipay.com / ta0bao.com / rnicrosoft.com（0↔o、1↔l↔i、rn↔m 等）
+  S4 关键词堆叠          → google-google-cn-google.hl.cn（同一关键词 ≥ 3 次）
+  S5 约束编辑距离        → deeрseek.com 等 typosquat（距离 ≤ 2，护栏：公共前后缀 ≥ 4）
+  S6 拼音关键词精确段    → tengxun-soft.com 命中腾讯全拼 "tengxun"
+WEAK（低置信嫌疑，基础 10 分）
+  W1 弱关键词精确段匹配  → sogou.evil.com 段 "sogou"（kw 4-5）
+  W2 标签子串包含        → pc-huorong.com.cn 包含 "huorong"（排除通用词碰撞）
+短关键词（≤ 3：qq / jd / rar ...）不参与段匹配，仅整域相等时 WEAK
+去连字符二次检测          → 含 - / _ 的域名去除后重跑上述规则
 ```
+
+**多特征联动评分**（封顶 60，下限 0）—— 仅域名相似远不足以触发警告：
+
+| 联动特征 | 分值 |
+| ------- | ---- |
+| 页面 title 声称被仿冒品牌 | +20 |
+| 未检测到有效 ICP 备案 | +10 |
+| 域名注册 < 90 天 | +10 |
+| 存在指向非官方域的下载链接 | +10 |
+| ICP 备案核验通过 | -15 |
+| 域名注册 > 730 天 | -10 |
+| WEAK 且页面未声称任何品牌 | 减半（+5） |
+
+设计目标：`tongyi.com` 等「域名撞品牌词但页面未自称该品牌、有自身备案」的合法站降至 ~30 分不再误报；真实钓鱼站（域名仿冒 + 页面自称官方 + 无备案 + 诱导下载）可达 60 分并与其他规则聚合触发警告。规则三的「盗用备案号」判定要求「域名嫌疑 + title 声称品牌」双重条件，避免误伤。
 
 域名数据库覆盖 **120 个**品牌，包含 19 个实际使用类别：安全软件、浏览器、即时通讯、输入法、办公、视频、音乐、云存储、AI Chat、下载工具、压缩工具、电商、地图出行、支付、开发者工具、系统工具、游戏平台、游戏加速器、新闻资讯。
 
@@ -221,6 +243,16 @@ Content Script 扫描页面上所有 `<a>` 标签，识别指向压缩包文件�
 - 同时识别公安备案号：`{省份}公网安备{10+位数字}号`
 - Content Script 通过 6 层扫描获取页面中所有可能包含备案号的文本：footer 元素、ICP/beian 命名元素、底部 30% 区域、所有 `<a>` 链接（含 beian.gov.cn / beian.miit.gov.cn 等政府备案链接）、position:fixed 底部固定栏、TreeWalker 全文本节点遍历（上限 15000 节点）
 
+**无备案分支联动降权**（保持 50 上限，下限 10）：无备案本身是弱信号——个人开源工具站、新上线的合法站点大量无备案。降权因子（可叠加，降权原因在警告详情可见）：
+
+| 降权因子 | 分值 | 说明 |
+| ------- | ---- | ---- |
+| 老域名 | -20 | 注册 > 730 天，运营已久的站点 |
+| title 未声称任何品牌 | -10 | 页面不冒充任何品牌 |
+| 可信信号 | -10 | 页面链接指向开源/文档平台（GitHub/Gitee 等），或 meta generator 标记 AI 生成 |
+
+「无备案 + 新域名 + 声称品牌 + 无可信信号」的钓鱼组合保持满分 50。`impersonating`（盗用备案号 +50）分支不受降权影响。
+
 #### 4. 链接分析（规则四 | 最高 70 分）
 
 Part A（先执行，可叠加）：
@@ -253,6 +285,8 @@ Part B（仅当 Part A 为 0 时执行）：
 - **信号4** — 异常 JS 引用模式（模板化语言包、通用脚本路径等克隆式资源布局）
 
 组合判定：≥3 个结构信号 = +30（高度可疑），2 个结构信号 = +20（中度可疑），0-1 = 0。
+
+**可信档案联动降权**：AI 生成的合法工具站/静态文档站天然命中「无框架+DOM简单+资源少」信号。当页面满足「无域名嫌疑 + 老域名(>730天) + 备案通过/中性 + 未声称任何品牌」时，结构信号分**减半**；若再叠加 AI 可信特征（meta generator 存在 + 页面链接指向可信外链），则**归零**。域名有仿冒嫌疑或页面声称品牌 → 不降权（保持原分）。
 
 ##### 子规则 B：关键词预筛选 + Emoji 密度检测（最高 +20 分）
 
@@ -408,12 +442,22 @@ Timeline:  document_start       page load        content script reports      use
 - 工具栏图标右下角显示蓝色对勾徽章
 - 弹窗显示绿色对勾 + 提示文字
 - 支持一键移出白名单并立即重新触发检测
+- **支持域名通配符**（在设置页「白名单」中编辑）：
+  - `example.com` —— 仅精确匹配该域名
+  - `*.example.com` —— 匹配 `example.com` 及其**所有子域名**（任意层级，如 `www.example.com`、`a.b.example.com`）
+  - `*` —— 匹配所有域名（完全跳过检测，**请谨慎使用**）
+  - 条目不区分大小写，自动忽略误粘贴的协议 / 路径 / 端口；例如输入 `https://*.Example.com/path` 会被规范化为 `*.example.com`
 
 #### 缓存策略
 
-- 检测结果缓存于 `chrome.storage.local`，TTL = 24 小时
+- 检测结果缓存于 `chrome.storage.local`，TTL = 24 小时（设置页可调）
 - Content Script 发回新数据时自动绕过缓存更新
 - 清除白名单时同步清除对应域名的缓存
+- **配额治理**（storage.local 上限 10MB，配额耗尽会导致检测失效）：
+  - 官方/可信/完全信任域名（`DomainDatabase` / `TrustedPlatforms` / `.gov.cn` 等）不读写缓存
+  - 周期清理：每 6 小时 alarm 自动扫描，删除过期条目 + 按 `lastAccess` LRU 保留最近 100 条
+  - 配额紧急保护：写入遇 `QuotaExceeded` 时自动清理（过期 + 最旧条目）后重试，检测结果不丢失
+- 标签页状态（`tab_state_*`）存于 `chrome.storage.session`（内存，不占 local 配额，浏览器会话结束自动清空），标签页关闭/替换时同步清理
 
 #### 弹窗去重
 

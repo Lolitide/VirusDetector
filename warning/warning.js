@@ -2,8 +2,22 @@
  * 控制高风险网页拦截页的主题、返回安全页面、AI 咨询、信任确认和报告入口。
  * 所有敏感操作均携带后台签发的 nonce，由 Service Worker 校验并执行。
  *
- * @module warning-page
+ * 职责：
+ * - 从 URL 参数读取检测结果并渲染警告界面
+ * - 处理关闭危险页面、跳转安全页面的用户操作
+ *
+ * 前置条件：
+ * - 由 Service Worker 构造 URL 参数打开本页：domain、score、correctUrl、officialName
+ *   （correctUrl 经 sanitizeUrl 协议白名单校验，仅允许 http/https，防 javascript: 注入）
+ *
+ * 输入与输出：
+ * - 输入：URL 参数 + 用户操作（继续访问/关闭危险页面/前往官方）
+ * - 副作用：关闭匹配危险域名（去 www. 前缀）的所有标签页、window.close() 自关；
+ *   误报/钓鱼上报经 SUBMIT_REPORT 回传 SW 并延时自关（PHISH_CONFIRM_TIMEOUT_MS）
  */
+import {
+  MSG_TYPES, REPORT_TYPES, WARNING_AUTO_CLOSE_SECONDS, PHISH_CONFIRM_TIMEOUT_MS
+} from '../utils/constants.js';
 
 (function () {
   'use strict';
@@ -12,86 +26,20 @@
   let selectedTheme = 'dark';
 
   /**
-   * @param {string} theme 主题设置
-   * @returns {'light'|'dark'|'auto'} 规范化主题
-   */
-  function normalizeTheme(theme) {
-    return theme === 'light' || theme === 'auto' ? theme : 'dark';
-  }
-
-  /**
-   * 应用扩展主题并保存用户选择。
-   * @param {'light'|'dark'|'auto'} theme 主题设置
-   * @returns {void}
-   */
-  function applyTheme(theme) {
-    selectedTheme = normalizeTheme(theme);
-    const resolvedTheme = selectedTheme === 'auto'
-      ? (systemTheme.matches ? 'dark' : 'light')
-      : selectedTheme;
-
-    document.documentElement.dataset.theme = resolvedTheme;
-    try {
-      localStorage.setItem('vt_theme', selectedTheme);
-    } catch {}
-  }
-
-  /** @returns {Promise<void>} */
-  async function syncThemeFromSettings() {
-    try {
-      const stored = await chrome.storage.local.get('global_settings');
-      const settings = stored && stored.global_settings ? stored.global_settings : {};
-      applyTheme(settings.theme || 'dark');
-    } catch (error) {
-      applyTheme(selectedTheme);
-    }
-  }
-
-  try {
-    selectedTheme = normalizeTheme(localStorage.getItem('vt_theme'));
-  } catch (error) {
-    selectedTheme = 'dark';
-  }
-
-  syncThemeFromSettings();
-
-  systemTheme.addEventListener('change', () => {
-    if (selectedTheme === 'auto') applyTheme('auto');
-  });
-
-  chrome.storage.onChanged.addListener((changes, areaName) => {
-    if (areaName !== 'local' || !changes.global_settings) return;
-    const settings = changes.global_settings.newValue || {};
-    applyTheme(settings.theme || 'dark');
-  });
-
-  /**
-   * @param {string} url 待校验网址
-   * @returns {string} 安全的 HTTP(S) 网址；无效输入返回空字符串
+   * 验证 URL 协议，仅允许 http/https，防止 javascript: 等注入
+   * 双重校验：URL 解析器协议白名单 + 显式 scheme 正则（防畸形输入与编码绕过）
+   * @param {string} url
+   * @returns {string} 安全 URL，无效时返回空字符串
    */
   function sanitizeUrl(url) {
     if (!url || typeof url !== 'string') return '';
+    const trimmed = url.trim();
+    if (!/^https?:\/\//i.test(trimmed)) return '';
     try {
-      const parsed = new URL(url);
-      return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.href : '';
-    } catch (error) {
-      return '';
-    }
-  }
-
-  /**
-   * 仅返回站点 origin，避免向外部 AI 分享路径和查询参数。
-   * @param {string} url 原始网址
-   * @returns {string} 可分享的站点 origin
-   */
-  function getShareableUrl(url) {
-    try {
-      const parsed = new URL(url);
-      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return '';
-      return parsed.origin;
-    } catch (error) {
-      return '';
-    }
+      const u = new URL(trimmed);
+      if (u.protocol !== 'http:' && u.protocol !== 'https:') return '';
+    } catch (e) { /* fall through */ }
+    return trimmed;
   }
 
   const params = new URLSearchParams(window.location.search);
@@ -103,16 +51,17 @@
   const originalUrl = sanitizeUrl(params.get('originalUrl') || '') || fallbackUrl;
   const reasons = (params.get('reasons') || '').trim();
 
-  const domainEl = document.getElementById('info-domain');
-  const dialogDomainEl = document.getElementById('dialog-domain');
-  const pageStatusEl = document.getElementById('page-status');
-  const dialogStatusEl = document.getElementById('dialog-status');
-  const trustDialog = document.getElementById('trust-dialog');
-  const confirmTrustButton = document.getElementById('btn-confirm-trust');
-  let accessRefreshRunning = false;
+  document.getElementById('risk-score').textContent = score;
+  document.getElementById('info-domain').textContent = domain;
+  document.getElementById('info-time').textContent = new Date().toLocaleString('zh-CN');
 
-  domainEl.textContent = domain;
-  dialogDomainEl.textContent = domain;
+  // correctUrl 已经 sanitizeUrl 协议白名单验证；赋值前再显式校验一次（防御性双保险）
+  const safeOfficialHref = /^https?:\/\//i.test(correctUrl) ? correctUrl : '';
+  if (safeOfficialHref) {
+    document.getElementById('official-section').style.display = 'block';
+    document.getElementById('official-domain').textContent = safeOfficialHref;
+    document.getElementById('official-btn').href = safeOfficialHref;
+  }
 
   /**
    * @param {string} message 页面状态文字
@@ -150,13 +99,86 @@
    * @param {string} url 目标网址
    * @returns {Promise<void>}
    */
-  async function moveCurrentTab(url) {
-    const currentTab = await chrome.tabs.getCurrent();
-    if (currentTab && currentTab.id) {
-      await chrome.tabs.update(currentTab.id, { url });
+  async function openSafePage(url) {
+    try {
+      const existingTabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (existingTabs.length > 0) {
+        await chrome.tabs.create({ url, index: existingTabs[0].index + 1 });
+      } else {
+        await chrome.tabs.create({ url });
+      }
+    } catch (e) {
+      console.error('[Warning] 打开安全页面失败:', e);
+    }
+  }
+
+  // ---- 按钮事件 ----
+
+  document.getElementById('btn-close').addEventListener('click', async () => {
+    await closeDangerousTabs(domain);
+    window.close();
+  });
+
+  // 仅当 correctUrl 通过 sanitizeUrl 验证后才打开，否则仅关闭危险标签页和弹窗
+  document.getElementById('btn-back-safe').addEventListener('click', async () => {
+    clearAutoClose();
+    await closeDangerousTabs(domain);
+    if (correctUrl) {
+      await openSafePage(correctUrl);
+    }
+    window.close();
+  });
+
+  // ---- 自动关闭 ----
+
+  // 30 秒倒计时后自动关闭警告弹窗，用户点击任意按钮则取消倒计时
+  let remaining = WARNING_AUTO_CLOSE_SECONDS;
+  const countdownEl = document.getElementById('auto-close-countdown');
+
+  function renderCountdown() {
+    if (countdownEl) {
+      countdownEl.textContent = `本提示将在 ${remaining} 秒后自动关闭`;
+    }
+  }
+
+  function clearAutoClose() {
+    clearInterval(autoCloseTimer);
+    if (countdownEl) countdownEl.textContent = '';
+  }
+
+  renderCountdown();
+  const autoCloseTimer = setInterval(() => {
+    remaining -= 1;
+    if (remaining <= 0) {
+      clearAutoClose();
+      window.close();
       return;
     }
-    window.location.replace(url);
+    renderCountdown();
+  }, 1000);
+
+  // 关闭按钮也取消倒计时（事件已绑定，补充清理）
+  document.getElementById('btn-close').addEventListener('click', clearAutoClose);
+
+  // ---- 误报上报 ----
+  const reportFalseBtn = document.getElementById('btn-report-false');
+  if (reportFalseBtn) {
+    reportFalseBtn.addEventListener('click', async () => {
+      reportFalseBtn.disabled = true;
+      reportFalseBtn.textContent = '上报中...';
+      try {
+        await chrome.runtime.sendMessage({
+          type: MSG_TYPES.SUBMIT_REPORT,
+          payload: { reportType: REPORT_TYPES.FALSE_POSITIVE, domain, note: '' }
+        });
+        reportFalseBtn.textContent = '✅ 已上报为误报，感谢反馈';
+        setTimeout(() => window.close(), PHISH_CONFIRM_TIMEOUT_MS);
+      } catch (e) {
+        console.error('[Warning] 误报上报失败:', e);
+        reportFalseBtn.textContent = '上报失败，请重试';
+        reportFalseBtn.disabled = false;
+      }
+    });
   }
 
   /** @returns {Promise<void>} */

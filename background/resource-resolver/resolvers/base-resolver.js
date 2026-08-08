@@ -20,6 +20,8 @@
  * @property {string} pageDomain             — 页面域名
  */
 
+import { ARCHIVE_EXTENSIONS, EXECUTABLE_EXTENSIONS } from '../config.js';
+
 export class BaseResolver {
   /**
    * 判断是否能处理指定的资源节点
@@ -83,17 +85,6 @@ export class BaseResolver {
       try { return new URL(url).pathname.toLowerCase(); } catch (e) { return url.toLowerCase(); }
     })();
 
-    const ARCHIVE_EXTS = [
-      '.zip', '.rar', '.7z', '.tar', '.gz', '.tar.gz', '.tgz',
-      '.bz2', '.xz', '.z', '.iso', '.cab', '.arj', '.lzh',
-      '.tar.bz2', '.tar.xz', '.gz2', '.zst', '.img', '.dmg'
-    ];
-    const EXECUTABLE_EXTS = [
-      '.exe', '.msi', '.apk', '.pkg', '.appx', '.deb', '.rpm',
-      '.bat', '.cmd', '.ps1', '.vbs', '.scr', '.jar',
-      '.bin', '.run', '.sh', '.dmg'
-    ];
-
     let ext = '';
     if (pathname.endsWith('.tar.gz')) ext = '.tar.gz';
     else if (pathname.endsWith('.tar.bz2')) ext = '.tar.bz2';
@@ -103,8 +94,9 @@ export class BaseResolver {
       ext = m ? '.' + m[1].toLowerCase() : '';
     }
 
-    const isArchive = ARCHIVE_EXTS.some(e => ext === e || pathname.endsWith(e));
-    const isExecutable = EXECUTABLE_EXTS.some(e => ext === e || pathname.endsWith(e));
+    // 扩展名列表来自 config.js（派生自 constants.js 并集）
+    const isArchive = ARCHIVE_EXTENSIONS.some(e => ext === e || pathname.endsWith(e));
+    const isExecutable = EXECUTABLE_EXTENSIONS.some(e => ext === e || pathname.endsWith(e));
     const isTxt = /\.(txt|text|log|csv)$/i.test(pathname);
     const isJson = /\.json$/i.test(pathname);
 

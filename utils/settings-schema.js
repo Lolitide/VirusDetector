@@ -2,20 +2,56 @@
  * Virus Detector — 设置 Schema（中央配置权威）
  *
  * 提供所有设置的默认值、校验规则、分区定义和灵敏度预设。
- * settings-schema.js 是唯一的事实来源（Single Source of Truth），
  * options.js 和 service-worker.js 均依赖此文件。
+ *
+ * 数值默认值从 utils/constants.js 单向派生（constants.js 为唯一真源），
+ * 避免同一阈值在两处各自维护导致漂移；SENSITIVITY_PRESETS 的覆盖值
+ * 属于预设专属调优，保持独立字面量。
+ *
+ * 导出：SETTINGS_DEFAULTS（默认值）、SECTIONS（分区/分组/设置项元数据）、
+ * SENSITIVITY_PRESETS（灵敏度预设）、validateSetting（单值校验并钳制）、
+ * SCHEMA_VERSION + migrateSettings（设置版本迁移）。
+ *
+ * migrateSettings 一次性迁移 v1 → v2：修正 apihz 凭据键名拼写
+ * （icpApiApiahzId/Key → icpApiApihzId/Key），幂等（_schemaVersion ≥
+ * SCHEMA_VERSION 时原样返回）；调用方读设置后调用，返回值不同则写回。
  *
  * @module settings-schema
  */
 
 import {
-  DEFAULT_WARNING_INTERVENTION_MODE,
-  WARNING_INTERVENTION_MODES
-} from './warning-intervention.js';
+  SCORE_THRESHOLD, DOWNLOAD_CONFIRM_THRESHOLD,
+  SCORE_RULE_1, SCORE_RULE_2_HIGH, SCORE_RULE_2_LOW,
+  RULE_2_DOMAIN_SUSPICION_THRESHOLD,
+  SCORE_RULE_2_PROACTIVE_MAX, SCORE_RULE_2_PER_HIGH_RISK, SCORE_RULE_2_PER_LOW_RISK,
+  SCORE_RULE_2_TRUSTED_PLATFORM, SCORE_RULE_2_HIJACK,
+  SCORE_RULE_2_BATCH_THRESHOLD, SCORE_RULE_2_BATCH_MULTIPLIER, SCORE_RULE_2_SUSPICION_MULTIPLIER,
+  SCORE_RULE_3, SCORE_RULE_3_FAKE,
+  SCORE_RULE_4A_SAME_PAGE, SCORE_RULE_4A_DEAD_LINK, SCORE_RULE_4A_DUPLICATE_LINK,
+  SCORE_RULE_4A_DOWNLOAD_LINK_BONUS,
+  SCORE_RULE_4B_DOWNLOAD_BTN, SCORE_RULE_4B_FILE_LINK, SCORE_RULE_4B_ARCHIVE_LINK,
+  SCORE_RULE_5, SCORE_RULE_5_PARTIAL,
+  SCORE_DOMAIN_AGE_MAX, DOMAIN_AGE_DECAY_A, DOMAIN_AGE_DECAY_B,
+  SCORE_DOMAIN_AGE_BONUS_MAX, DOMAIN_AGE_BONUS_SCORE_THRESHOLD,
+  DOMAIN_AGE_BONUS_MIN_DAYS, DOMAIN_AGE_BONUS_MAX_DAYS,
+  DETECT_NON_ARCHIVE_FILES_DEFAULT,
+  SCORE_DOWNLOAD_CROSS_DOMAIN, SCORE_DOWNLOAD_NEW_DOMAIN, SCORE_DOWNLOAD_BLACKLIST,
+  DOWNLOAD_VALID_DAYS_THRESHOLD, DOWNLOAD_CREATION_DAYS_THRESHOLD,
+  DOWNLOAD_BLACKLIST_MAX_ENTRIES, DOWNLOAD_BLACKLIST_CLEANUP_DAYS,
+  SAME_PAGE_LINK_THRESHOLD, DUPLICATE_LINK_THRESHOLD, DEAD_LINK_THRESHOLD,
+  AI_PAGE_THRESHOLDS,
+  EMOJI_KEYWORD_MATCH_THRESHOLD, EMOJI_MIN_TEXT_LENGTH, EMOJI_DENSITY_MAX_SCORE,
+  EMOJI_DENSITY_THRESHOLD_LOW, EMOJI_DENSITY_THRESHOLD_HIGH,
+  DOWNLOAD_DENSITY_THRESHOLD,
+  CACHE_TTL, HOUR_MS,
+  WHOIS_API_TIMEOUT, MIN_WHOIS_INTERVAL_MS, WARNING_COOLDOWN_MS,
+  THEME_VALUES, PRESET_LEVELS
+} from './constants.js';
 
 // ==================== Schema 版本 ====================
+// 版本迁移见文件尾 migrateSettings()
 /** 用于检测旧版本数据并触发迁移 */
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 2;
 
 // ==================== 灵敏度预设 ====================
 /**
@@ -53,7 +89,7 @@ export const SENSITIVITY_PRESETS = {
   medium: {
     label: '中灵敏度（默认）',
     description: '平衡检测率与误报率，适合大多数用户。',
-    overrides: {}  // 空对象表示使用 SETTINGS_DEFAULTS 中的值
+    overrides: {}
   },
   high: {
     label: '高灵敏度',
@@ -91,8 +127,8 @@ export const SENSITIVITY_PRESETS = {
 // ==================== 设置默认值 ====================
 export const SETTINGS_DEFAULTS = {
   // === 常规设置 (basic) ===
-  sensitivityPreset: 'medium',
-  theme: 'dark',
+  sensitivityPreset: PRESET_LEVELS[1],
+  theme: THEME_VALUES[0],
   desktopNotifications: true,
   showWarningWindow: true,
   warningInterventionMode: DEFAULT_WARNING_INTERVENTION_MODE,
@@ -106,74 +142,76 @@ export const SETTINGS_DEFAULTS = {
   rule5Enabled: true,
   downloadInjection: true,
 
-  // === 评分阈值 (advanced) ===
-  scoreThreshold: 100,
-  downloadConfirmThreshold: 80,
-  rule1_score: 60,
-  rule2_highScore: 40,
-  rule2_lowScore: 10,
-  rule2_domainSuspicionThreshold: 30,
-  rule2_proactiveMax: 30,
-  rule2_perHighRisk: 10,
-  rule2_perLowRisk: 5,
-  rule2_trustedPlatformScore: 3,
-  rule2_hijackScore: 30,
-  rule2_batchThreshold: 3,
-  rule2_batchMultiplier: 2.0,
-  rule2_suspicionMultiplier: 1.5,
-  rule3_score: 50,
-  rule3_fakeScore: 30,
-  rule4a_samePageScore: 20,
-  rule4a_deadLinkScore: 20,
-  rule4a_duplicateLinkScore: 20,
-  rule4a_downloadBonus: 10,
-  rule4b_downloadBtnScore: 10,
-  rule4b_fileLinkScore: 10,
-  rule4b_archiveLinkScore: 10,
-  rule5_fullScore: 30,
-  rule5_partialScore: 20,
-  domainAge_scoreMax: 60,
-  domainAge_decayA: 2.2,
-  domainAge_decayB: 1.9,
-  domainAgeBonus_max: 20,
-  domainAgeBonus_scoreThreshold: 20,
-  domainAgeBonus_minDays: 365,
-  domainAgeBonus_maxDays: 730,
+  // === 评分阈值 (advanced) —— 数值来自 utils/constants.js（唯一真源） ===
+  scoreThreshold: SCORE_THRESHOLD,
+  downloadConfirmThreshold: DOWNLOAD_CONFIRM_THRESHOLD,
+  rule1_score: SCORE_RULE_1,
+  rule2_highScore: SCORE_RULE_2_HIGH,
+  rule2_lowScore: SCORE_RULE_2_LOW,
+  rule2_domainSuspicionThreshold: RULE_2_DOMAIN_SUSPICION_THRESHOLD,
+  rule2_proactiveMax: SCORE_RULE_2_PROACTIVE_MAX,
+  rule2_perHighRisk: SCORE_RULE_2_PER_HIGH_RISK,
+  rule2_perLowRisk: SCORE_RULE_2_PER_LOW_RISK,
+  rule2_trustedPlatformScore: SCORE_RULE_2_TRUSTED_PLATFORM,
+  rule2_hijackScore: SCORE_RULE_2_HIJACK,
+  rule2_batchThreshold: SCORE_RULE_2_BATCH_THRESHOLD,
+  rule2_batchMultiplier: SCORE_RULE_2_BATCH_MULTIPLIER,
+  rule2_suspicionMultiplier: SCORE_RULE_2_SUSPICION_MULTIPLIER,
+  rule3_score: SCORE_RULE_3,
+  rule3_fakeScore: SCORE_RULE_3_FAKE,
+  rule4a_samePageScore: SCORE_RULE_4A_SAME_PAGE,
+  rule4a_deadLinkScore: SCORE_RULE_4A_DEAD_LINK,
+  rule4a_duplicateLinkScore: SCORE_RULE_4A_DUPLICATE_LINK,
+  rule4a_downloadBonus: SCORE_RULE_4A_DOWNLOAD_LINK_BONUS,
+  rule4b_downloadBtnScore: SCORE_RULE_4B_DOWNLOAD_BTN,
+  rule4b_fileLinkScore: SCORE_RULE_4B_FILE_LINK,
+  rule4b_archiveLinkScore: SCORE_RULE_4B_ARCHIVE_LINK,
+  rule5_fullScore: SCORE_RULE_5,
+  rule5_partialScore: SCORE_RULE_5_PARTIAL,
+  domainAge_scoreMax: SCORE_DOMAIN_AGE_MAX,
+  domainAge_decayA: DOMAIN_AGE_DECAY_A,
+  domainAge_decayB: DOMAIN_AGE_DECAY_B,
+  domainAgeBonus_max: SCORE_DOMAIN_AGE_BONUS_MAX,
+  domainAgeBonus_scoreThreshold: DOMAIN_AGE_BONUS_SCORE_THRESHOLD,
+  domainAgeBonus_minDays: DOMAIN_AGE_BONUS_MIN_DAYS,
+  domainAgeBonus_maxDays: DOMAIN_AGE_BONUS_MAX_DAYS,
 
   // === 下载检测 (advanced) ===
-  detectNonArchiveFiles: false,
+  detectNonArchiveFiles: DETECT_NON_ARCHIVE_FILES_DEFAULT,
   hijackDetection: true,
-  download_crossDomainScore: 10,
-  download_newDomainScore: 10,
-  download_blacklistScore: 20,
-  download_validDaysThreshold: 365,
-  download_creationDaysThreshold: 90,
-  download_blacklistMaxEntries: 500,
-  download_blacklistCleanupDays: 90,
+  download_crossDomainScore: SCORE_DOWNLOAD_CROSS_DOMAIN,
+  download_newDomainScore: SCORE_DOWNLOAD_NEW_DOMAIN,
+  download_blacklistScore: SCORE_DOWNLOAD_BLACKLIST,
+  download_validDaysThreshold: DOWNLOAD_VALID_DAYS_THRESHOLD,
+  download_creationDaysThreshold: DOWNLOAD_CREATION_DAYS_THRESHOLD,
+  download_blacklistMaxEntries: DOWNLOAD_BLACKLIST_MAX_ENTRIES,
+  download_blacklistCleanupDays: DOWNLOAD_BLACKLIST_CLEANUP_DAYS,
 
   // === 链接分析 (advanced) ===
-  link_samePageThreshold: 8,
-  link_duplicateThreshold: 4,
-  link_deadLinkThreshold: 3,
+  link_samePageThreshold: SAME_PAGE_LINK_THRESHOLD,
+  link_duplicateThreshold: DUPLICATE_LINK_THRESHOLD,
+  link_deadLinkThreshold: DEAD_LINK_THRESHOLD,
   checkDeadLinks: true,
 
   // === 代码工程化 (advanced) ===
-  code_minDomNodes: 100,
-  code_minExternalResources: 5,
-  code_minTextLength: 500,
+  code_minDomNodes: AI_PAGE_THRESHOLDS.MIN_DOM_NODES,
+  code_minExternalResources: AI_PAGE_THRESHOLDS.MIN_EXTERNAL_RESOURCES,
+  code_minTextLength: AI_PAGE_THRESHOLDS.MIN_TEXT_LENGTH,
   emojiDensityCheck: true,
-  emoji_keywordMatchThreshold: 1,
-  emoji_minTextLength: 100,
-  emoji_densityMaxScore: 20,
-  emoji_densityThresholdLow: 2.0,
-  emoji_densityThresholdHigh: 10.0,
-  code_signalsFull: 3,
+  emoji_keywordMatchThreshold: EMOJI_KEYWORD_MATCH_THRESHOLD,
+  emoji_minTextLength: EMOJI_MIN_TEXT_LENGTH,
+  emoji_densityMaxScore: EMOJI_DENSITY_MAX_SCORE,
+  emoji_densityThresholdLow: EMOJI_DENSITY_THRESHOLD_LOW,
+  emoji_densityThresholdHigh: EMOJI_DENSITY_THRESHOLD_HIGH,
+  downloadDensityThreshold: DOWNLOAD_DENSITY_THRESHOLD,
+  code_signalsFull: 3,   // 信号数阈值：由规则五强弱信号模型定义，constants.js 无对应常量
   code_signalsPartial: 2,
 
   // === 缓存与性能 (advanced) ===
-  cache_ttlHours: 24,
-  api_timeoutMs: 8000,
-  whois_apiIntervalMs: 2100,
+  cache_ttlHours: CACHE_TTL / HOUR_MS,
+  api_timeoutMs: WHOIS_API_TIMEOUT,
+  whois_apiIntervalMs: MIN_WHOIS_INTERVAL_MS,
+  warning_cooldownMs: WARNING_COOLDOWN_MS,
 
   // === 隐私与数据 (basic) ===
   allowAnonymousReporting: true,
@@ -183,8 +221,8 @@ export const SETTINGS_DEFAULTS = {
   icpApiEnabled: true,          // 总开关：关闭则回退页面文本扫描
   icpApiProviderUapis: true,    // uapis.cn 数据源开关
   icpApiProviderApihz: true,    // apihz.cn 数据源开关
-  icpApiApiahzId: '',           // 用户自有 apihz id（留空用内置公开凭据）
-  icpApiApiahzKey: ''           // 用户自有 apihz key
+  icpApiApihzId: '',            // 用户自有 apihz id（留空用内置公开凭据）
+  icpApiApihzKey: ''            // 用户自有 apihz key
 };
 
 // ==================== Section 定义（驱动 UI 渲染） ====================
@@ -333,7 +371,7 @@ export const SECTIONS = [
     ]
   },
 
-  // ========== 2.5 备案查询 API ==========
+  // ========== 3. 备案查询 API ==========
   {
     id: 'icp-api',
     label: '备案查询 API',
@@ -371,12 +409,12 @@ export const SECTIONS = [
         mode: 'advanced',
         settings: [
           {
-            key: 'icpApiApiahzId', type: 'text', label: 'apihz 接口 ID',
+            key: 'icpApiApihzId', type: 'text', label: 'apihz 接口 ID',
             desc: '填写自有 apihz.cn 账号的 id 可绕过公共 10 次/分钟限流；留空使用内置公开凭据。',
             mode: 'advanced', placeholder: '留空 = 使用内置公开凭据'
           },
           {
-            key: 'icpApiApiahzKey', type: 'text', label: 'apihz 接口 Key',
+            key: 'icpApiApihzKey', type: 'text', label: 'apihz 接口 Key',
             desc: '与上方 ID 配套的 key（在 apihz.cn 申请）。留空使用内置公开凭据。',
             mode: 'advanced', placeholder: '留空 = 使用内置公开凭据'
           }
@@ -385,7 +423,7 @@ export const SECTIONS = [
     ]
   },
 
-  // ========== 5. 链接分析 ==========
+  // ========== 4. 链接分析 ==========
   {
     id: 'links',
     label: '链接分析',
@@ -412,7 +450,7 @@ export const SECTIONS = [
     ]
   },
 
-  // ========== 6. 代码工程化 ==========
+  // ========== 5. 代码工程化 ==========
   {
     id: 'code',
     label: '代码工程',
@@ -442,6 +480,7 @@ export const SECTIONS = [
           { key: 'emoji_densityMaxScore', type: 'number', label: 'Emoji 得分上限', desc: 'Emoji 密度检测单次最大加分', min: 0, max: 100, step: 5, mode: 'advanced' },
           { key: 'emoji_densityThresholdLow', type: 'number', label: '密度下阈值(个/千字)', desc: '低于此值不加分', min: 0, max: 20, step: 0.5, mode: 'advanced' },
           { key: 'emoji_densityThresholdHigh', type: 'number', label: '密度上阈值(个/千字)', desc: '高于此值得满分', min: 0, max: 50, step: 0.5, mode: 'advanced' },
+          { key: 'downloadDensityThreshold', type: 'number', label: '下载意图密度阈值(个/千字)', desc: '页面下载关键词密度高于此值时触发完整检测', min: 0, max: 20, step: 0.5, mode: 'advanced' },
           { key: 'emoji_keywordMatchThreshold', type: 'number', label: '关键词匹配阈值', desc: '推广关键词匹配≥此值才进入Emoji检测', min: 0, max: 10, step: 1, mode: 'advanced' },
           { key: 'emoji_minTextLength', type: 'number', label: '最小文本长度', desc: '页面文本少于此值跳过Emoji检测', min: 0, max: 1000, step: 10, mode: 'advanced' }
         ]
@@ -449,7 +488,7 @@ export const SECTIONS = [
     ]
   },
 
-  // ========== 7. 域名年龄 ==========
+  // ========== 6. 域名年龄 ==========
   {
     id: 'domain-age',
     label: '域名年龄',
@@ -483,7 +522,7 @@ export const SECTIONS = [
     ]
   },
 
-  // ========== 8. 缓存与性能 ==========
+  // ========== 7. 缓存与性能 ==========
   {
     id: 'cache',
     label: '缓存与性能',
@@ -531,7 +570,7 @@ export const SECTIONS = [
     ]
   },
 
-  // ========== 9. 隐私与数据 ==========
+  // ========== 8. 隐私与数据 ==========
   {
     id: 'privacy',
     label: '隐私与数据',
@@ -578,7 +617,7 @@ export const SECTIONS = [
     ]
   },
 
-  // ========== 10. 站点黑名单 ==========
+  // ========== 9. 站点黑名单 ==========
   {
     id: 'site-blacklist',
     label: '站点黑名单',
@@ -589,7 +628,7 @@ export const SECTIONS = [
     renderFn: '_renderSiteBlacklistSection'
   },
 
-  // ========== 11. 白名单 ==========
+  // ========== 10. 白名单 ==========
   {
     id: 'whitelist',
     label: '白名单',
@@ -600,7 +639,7 @@ export const SECTIONS = [
     renderFn: '_renderWhitelistSection'
   },
 
-  // ========== 12. 关于 ==========
+  // ========== 11. 关于 ==========
   {
     id: 'about',
     label: '关于',
@@ -814,16 +853,18 @@ export function validateSetting(key, value) {
       return num;
     }
     case 'string':
-      // 主题值校验：仅允许 dark / light / auto
+      // 主题值校验：仅允许 THEME_VALUES 枚举
       if (key === 'theme') {
-        const validThemes = ['dark', 'light', 'auto'];
-        return validThemes.includes(value) ? value : def;
+        return THEME_VALUES.includes(value) ? value : def;
       }
-      // 选项型设置只接受 Schema 中声明的值。
-      const setting = findSettingMeta(key);
-      if (setting?.options) {
-        const validValues = setting.options.map(o => o.value);
-        return validValues.includes(value) ? value : def;
+      // select 类型：验证是否在 options 中（预设档位/主题名等共享枚举）
+      if (PRESET_LEVELS.includes(def) || THEME_VALUES.includes(def)) {
+        const setting = findSettingMeta(key);
+        if (setting && setting.options) {
+          const validValues = setting.options.map(o => o.value);
+          if (validValues.includes(value)) return value;
+          return def;
+        }
       }
       return String(value);
     default:
@@ -843,4 +884,42 @@ function findSettingMeta(key) {
     }
   }
   return null;
+}
+
+// ==================== 设置迁移 ====================
+
+/**
+ * 一次性设置迁移 v1 → v2。
+ * v2 修正 apihz 凭据键名拼写：icpApiApiahzId/Key → icpApiApihzId/Key
+ * （旧键值拷到新键，新键已有值时保留新键，随后删除旧键）。
+ *
+ * 幂等：存储中 _schemaVersion >= SCHEMA_VERSION 时原样返回；
+ * 未写 _schemaVersion 的旧数据视为 v1。
+ * 调用方（service-worker.js loadGlobalSettings / options.js _loadSettings）
+ * 应在读设置后调用，若返回对象与存储不同则写回。
+ *
+ * @param {Object|undefined} stored - chrome.storage 中读出的设置对象
+ * @returns {Object} 迁移后的设置对象（未变时返回原引用）
+ */
+export function migrateSettings(stored) {
+  if (!stored || typeof stored !== 'object') return stored || {};
+  let v = stored._schemaVersion;
+  if (v === undefined) v = 1; // 旧数据未写 _schemaVersion，视为 v1
+  if (v >= SCHEMA_VERSION) return stored;
+
+  const out = { ...stored };
+  if (v < 2) {
+    // 旧键 → 新键（新键已有值时保留新键），随后删除旧键
+    if (out.icpApiApiahzId !== undefined) {
+      if (out.icpApiApihzId === undefined) out.icpApiApihzId = out.icpApiApiahzId;
+      delete out.icpApiApiahzId;
+    }
+    if (out.icpApiApiahzKey !== undefined) {
+      if (out.icpApiApihzKey === undefined) out.icpApiApihzKey = out.icpApiApiahzKey;
+      delete out.icpApiApiahzKey;
+    }
+    v = 2;
+  }
+  out._schemaVersion = v;
+  return out;
 }

@@ -9,7 +9,7 @@
  *   1. 页面导航监听 → 白名单检查 → 缓存查询 → 触发评分分析
  *   2. 评分汇总     → 徽章更新（绿/红/蓝） + 警告弹窗 + 下载拦截注入
  *   3. 下载监听     → 压缩包检测 → 取消下载 → 二次确认弹窗 → 用户决策处理
- *   4. 消息路由     → 处理来自 Popup / Content Script / Warning 的 15 种消息类型
+ *   4. 消息路由     → 处理来自 Popup / Content Script / Warning 的消息（类型见 utils/constants.js MSG_TYPES）
  *   5. 白名单管理   → 存储持久化 / 增删查 / 跳过检测 / 缓存清理
  *   6. 黑名单维护   → 下载域名黑名单写入 / 过期清理 / 容量控制
  *   7. 全局设置     → 非压缩包检测开关读取（预留设置页接入）
@@ -18,40 +18,50 @@
  *   - 安装/更新时自动初始化、清理过期缓存、清理过期黑名单条目
  *   - 标签页关闭时自动清理对应状态
  *   - 5 秒冷却期内不重复触发警告（同标签页 / 同域名）
+ *
+ * 输入输出：
+ *   - 输入：chrome.tabs.onUpdated 导航事件、chrome.downloads.onChanged 下载事件，
+ *     Popup / Content Script / Warning 页面经 chrome.runtime.onMessage 发来的消息（MSG_TYPES）
+ *   - 输出：分析结果写缓存（STORAGE_KEYS.DOMAIN_CACHE）、白名单（WHITELIST）、
+ *     下载/站点黑名单（DOWNLOAD_BLACKLIST / SITE_BLACKLIST），
+ *     回传消息给调用方、更新徽章（绿/红/蓝）、打开警告/下载确认页
  */
 
 import { ScoringEngine, setActiveSettings } from './scoring-engine.js';
 import { DomainDatabase } from './domain-database.js';
-import { CacheManager } from './cache-manager.js';
+import { CacheManager, invalidateCacheTtl } from './cache-manager.js';
 import { DownloadBlacklist } from './download-blacklist.js';
 import { SiteAccessManager } from './site-access-manager.js';
 import { ResourceResolver } from './resource-resolver/index.js';
 import { registerNonChineseBrandDomains, IcpUtils } from './icp-utils.js';
 import { IcpApiClient } from './icp-api.js';
+import { WhoisClient } from './whois-client.js';
 import { UrlUtils } from '../utils/url-utils.js';
+import {
+  normalizeWhitelistEntry, isWildcardPattern, matchWhitelistEntry, isWhitelistedDomain
+} from '../utils/whitelist-matcher.js';
+import { isFullyTrusted } from '../utils/exemptions/fully-trusted.js';
 import {
   SCORE_THRESHOLD, DOWNLOAD_CONFIRM_THRESHOLD, RISK_LEVEL, MSG_TYPES,
   STORAGE_KEYS, CACHE_TTL, DETECT_NON_ARCHIVE_FILES_DEFAULT,
   VERSION, REPORT_API_URL, GITHUB_RELEASES_API_URL, GITHUB_RELEASES_PAGE,
   UPDATE_VERSION_API_URL, UPDATE_CHANNEL, UPDATE_CHECK_TIMEOUT_MS, UPDATE_RETRY_DELAY_MINUTES,
-  ICP_API_CONFIG, SCORE_SITE_BLACKLIST
+  ICP_API_CONFIG, SCORE_SITE_BLACKLIST, WARNING_COOLDOWN_MS,
+  ARCHIVE_EXTENSIONS, EXECUTABLE_EXTENSIONS, DOWNLOAD_INTENT_KEYWORDS,
+  buildAuthPatterns, ALARM_NAME_UPDATE_CHECK, UPDATE_CHECK_PERIOD_MINUTES,
+  CACHE_CLEANUP_ALARM_NAME, CACHE_CLEANUP_PERIOD_MINUTES, CACHE_LRU_KEEP_COUNT,
+  GATE_TIMEOUT_MS, BLOCKER_OBSERVER_LIFETIME_MS, REPORTS_MAX_ENTRIES,
+  DOWNLOAD_CONFIRM_ACTIONS, REPORT_TYPES
 } from '../utils/constants.js';
-import { SETTINGS_DEFAULTS, SENSITIVITY_PRESETS } from '../utils/settings-schema.js';
-import {
-  shouldTriggerWarningFlow,
-  shouldUseFullPageWarning
-} from '../utils/warning-intervention.js';
+import { SETTINGS_DEFAULTS, migrateSettings } from '../utils/settings-schema.js';
 
 // ==================== URL 协议守卫 ====================
 
 /**
  * 判断 URL 是否应跳过分析（仅分析 http/https 协议）
  *
- * 修复历史误报：file://、data:、ftp:、view-source: 等协议的 URL
- *  - 没有可分析的主机名（hostname 为 ""）
- *  - 历史上所有 file:// 页面共享同一个空字符串缓存键 `domain_cache_`，
- *    一次恶意缓存会污染所有本地文件
- *  - 旧版本 Content Script 曾在所有协议页面运行，并会从 file:// 页面发送数据
+ * 非 http(s) 协议（file:/data:/ftp:/view-source: 等）无有效主机名，
+ * 无法分析也无缓存意义，统一跳过。
  *
  * @param {string} url
  * @returns {boolean} true 表示应跳过（不分析）
@@ -93,29 +103,8 @@ function shouldSkipUrl(url) {
   }
 }
 
-const WARNING_PAGE_URL = chrome.runtime.getURL('warning/warning.html');
-const REPORT_PAGE_URL = chrome.runtime.getURL('warning/report.html');
-
-function isExtensionPage(url, pageUrl) {
-  try {
-    const parsed = new URL(url || '');
-    const expected = new URL(pageUrl);
-    return parsed.origin === expected.origin && parsed.pathname === expected.pathname;
-  } catch {
-    return false;
-  }
-}
-
-function isWarningPageUrl(url) {
-  return isExtensionPage(url, WARNING_PAGE_URL);
-}
-
-function isReportPageUrl(url) {
-  return isExtensionPage(url, REPORT_PAGE_URL);
-}
-
-const AUTH_HOST_PATTERN = /^(login|logon|signin|auth|oauth|account|accounts|identity|id|sso|secure|security|verify|verification|console)\./i;
-const AUTH_PATH_PATTERN = /(?:^|[\/?#&=._-])(login|logon|logout|signin|sign-in|signout|sign-out|auth|oauth|authorize|sso|saml|2fa|mfa|otp|totp|challenge|verify|verification|webauthn|passkey|password|credential|credentials|session|callback|consent|recover|recovery|reset|device)(?:$|[\/?#&=._-])/i;
+// 认证 URL 特征正则（源串与构造统一来自 constants.js buildAuthPatterns）
+const { host: AUTH_HOST_PATTERN, path: AUTH_PATH_PATTERN } = buildAuthPatterns();
 
 function isSensitiveAuthenticationUrl(url) {
   try {
@@ -289,7 +278,7 @@ async function checkForUpdate() {
         }
       });
       // 恢复 24h 周期检查
-      await chrome.alarms.create('updateCheck', { periodInMinutes: 1440 });
+      await chrome.alarms.create(ALARM_NAME_UPDATE_CHECK, { periodInMinutes: UPDATE_CHECK_PERIOD_MINUTES });
       console.log(`[ServiceWorker] 更新检查完成（${name}）:`, hasUpdate ? `发现新版本 v${data.version}` : '已是最新版本');
       return;
     } catch (e) {
@@ -316,7 +305,7 @@ async function checkForUpdate() {
     }
   });
   // 安排提前重试（成功后会恢复 24h 周期）
-  await chrome.alarms.create('updateCheck', { delayInMinutes: UPDATE_RETRY_DELAY_MINUTES });
+  await chrome.alarms.create(ALARM_NAME_UPDATE_CHECK, { delayInMinutes: UPDATE_RETRY_DELAY_MINUTES });
 }
 
 // ==================== 缓存清洗 ====================
@@ -375,6 +364,18 @@ function sanitizeRuleResultsForCache(ruleResults) {
 // ==================== 标签页状态管理 ====================
 
 /**
+ * 标签页状态存储介质选择。
+ * tabState 为临时数据（浏览器会话内有效，SW 重启后重新分析即可），
+ * 优先使用 chrome.storage.session（内存 10MB 独立配额，不占用 storage.local 的
+ * 10MB 持久配额，浏览器会话结束自动清空）；Firefox 旧版等无 session 时回退 local。
+ */
+function _tabStateStorage() {
+  return (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.session)
+    ? chrome.storage.session
+    : chrome.storage.local;
+}
+
+/**
  * 创建初始标签页状态对象
  * @returns {Object} 包含所有规则结果、下载状态、页面数据、白名单标志的初始状态
  */
@@ -402,7 +403,7 @@ function createTabState() {
 async function loadTabState(tabId) {
   try {
     const key = STORAGE_KEYS.TAB_STATE_PREFIX + tabId;
-    const r = await chrome.storage.local.get(key);
+    const r = await _tabStateStorage().get(key);
     return r[key] || createTabState();
   } catch (e) { return createTabState(); }
 }
@@ -411,47 +412,36 @@ async function saveTabState(tabId, s) {
   try {
     const sanitizedState = { ...s };
     delete sanitizedState.pageText; // 不持久化页面正文，仅保留派生指标 textSignals
-    await chrome.storage.local.set({ [STORAGE_KEYS.TAB_STATE_PREFIX + tabId]: sanitizedState });
+    await _tabStateStorage().set({ [STORAGE_KEYS.TAB_STATE_PREFIX + tabId]: sanitizedState });
   } catch (e) { /* ignore */ }
 }
 
 async function clearTabState(tabId) {
   try {
-    await chrome.storage.local.remove(STORAGE_KEYS.TAB_STATE_PREFIX + tabId);
+    await _tabStateStorage().remove(STORAGE_KEYS.TAB_STATE_PREFIX + tabId);
   } catch (e) { /* ignore */ }
 }
 
-function createBlockedNonce() {
-  if (typeof crypto.randomUUID === 'function') return crypto.randomUUID();
-  const bytes = crypto.getRandomValues(new Uint8Array(16));
-  return [...bytes].map(value => value.toString(16).padStart(2, '0')).join('');
-}
-
-async function requireBlockedContext(sender, nonce, pageUrl) {
-  if (!sender.tab?.id || !nonce || !isExtensionPage(sender.url, pageUrl)) {
-    throw new Error('invalid_blocked_context');
+/**
+ * 一次性清理：旧版本遗留的 chrome.storage.local 中的 tab_state_* 键。
+ * tabState 已迁移至 chrome.storage.session，local 中的残留仅占配额无任何价值；
+ * 在 onInstalled(update) 时执行一次，避免每启动扫描 local 的开销。
+ * 注意：仅当当前介质确为 session 时才清理 local 残留——
+ * Firefox(<142) 无 chrome.storage.session，回退路径下 tabState 存于 local，
+ * 此时清理会删除活跃标签页的检测状态。
+ */
+async function cleanupLegacyLocalTabStates() {
+  if (!(typeof chrome !== 'undefined' && chrome.storage && chrome.storage.session)) return;
+  try {
+    const all = await chrome.storage.local.get(null);
+    const keys = Object.keys(all).filter(k => k.startsWith(STORAGE_KEYS.TAB_STATE_PREFIX));
+    if (keys.length > 0) {
+      await chrome.storage.local.remove(keys);
+      console.log(`[ServiceWorker] 已清理旧版遗留的 ${keys.length} 条 local tab_state`);
+    }
+  } catch (e) {
+    console.warn('[ServiceWorker] 清理旧版遗留 tab_state 失败:', e.message);
   }
-
-  const tabState = await loadTabState(sender.tab.id);
-  const context = tabState._blockedContext;
-  if (!context || context.nonce !== nonce || shouldSkipUrl(context.url) ||
-      Date.now() - context.createdAt > 30 * 60 * 1000) {
-    throw new Error('invalid_blocked_context');
-  }
-  return { tabId: sender.tab.id, tabState, context };
-}
-
-async function saveBlockedContextToTab(tabId, context) {
-  const tabState = await loadTabState(tabId);
-  tabState._blockedContext = { ...context };
-  await saveTabState(tabId, tabState);
-}
-
-async function discardBlockedContext(tabId, nonce) {
-  const tabState = await loadTabState(tabId);
-  if (tabState._blockedContext?.nonce !== nonce) return;
-  delete tabState._blockedContext;
-  await saveTabState(tabId, tabState);
 }
 
 // ==================== 工具栏图标与徽章更新 ====================
@@ -484,6 +474,205 @@ function setIconWhitelist(tabId) {
   chrome.action.setBadgeBackgroundColor({ tabId, color: '#2196F3' }).catch(() => {});
 }
 
+/** 预评估状态：清除徽章（等待 Gate 判定中） */
+function setIconNeutral(tabId) {
+  chrome.action.setBadgeText({ tabId, text: '' }).catch(() => {});
+}
+
+// ==================== Gate 超时管理 ====================
+
+// Gate 等待超时（Content Script 最长等待时间）来自 constants.js GATE_TIMEOUT_MS
+
+/** 活跃的 Gate 超时定时器：tabId → setTimeout id */
+const _gateTimeouts = new Map();
+
+/** 预评估阶段的 Whois Promise（内存缓存，不可序列化到 storage）：tabId → Promise */
+const _whoisPromises = new Map();
+
+function scheduleGateTimeout(tabId, domain) {
+  // 先清除已有超时
+  cancelGateTimeout(tabId);
+  const timerId = setTimeout(async () => {
+    _gateTimeouts.delete(tabId);
+    try {
+      const tab = await chrome.tabs.get(tabId).catch(() => null);
+      if (!tab || !tab.url) return;
+      // 超时降级：按 Gate 失败处理
+      const tabState = await loadTabState(tabId);
+      if (tabState._gatePhase !== 'preliminary') return; // 已经处理过了
+      console.log('[ServiceWorker] Gate 超时（Content Script 未响应），按 Gate 失败降级:', domain);
+      tabState._gatePhase = 'resolved';
+      tabState._needsDetection = false;
+      await saveTabState(tabId, tabState);
+      setIconGreen(tabId, 0);
+    } catch (e) { /* 标签页已关闭 */ }
+  }, GATE_TIMEOUT_MS);
+  _gateTimeouts.set(tabId, timerId);
+}
+
+function cancelGateTimeout(tabId) {
+  const existing = _gateTimeouts.get(tabId);
+  if (existing) {
+    clearTimeout(existing);
+    _gateTimeouts.delete(tabId);
+  }
+}
+
+// ==================== 白名单管理 ====================
+// 白名单存储在 chrome.storage.local 中，键名为 STORAGE_KEYS.WHITELIST
+// 数据结构：string[] — 域名/通配符列表（不含协议和路径，如 "example.com"）
+//   支持三种条目：
+//     - 精确域名：example.com            → 仅匹配该主机名
+//     - 通配符域名：*.example.com        → 匹配 example.com 及其所有子域名（任意层级）
+//     - 全匹配：*                         → 匹配所有域名（完全跳过检测，慎用）
+// 白名单中的域名完全跳过 5 规则检测，工具栏图标显示蓝色 "✓" 徽章
+//
+// 性能优化：内存缓存（精确域名 Set + 通配符数组）+ storage.onChanged 失效机制，
+// 精确匹配保持 O(1)，通配符按条目数线性匹配（白名单规模通常很小，可接受）。
+
+/** @type {Set<string>|null} 精确白名单域名集合（不含通配符，已规范化小写） */
+let _whitelistExact = null;
+/** @type {string[]|null} 通配符白名单条目（含 *，已规范化小写） */
+let _whitelistPatterns = null;
+/** @type {string[]|null} 原始白名单数组（用于增删等需要完整列表的操作） */
+let _whitelistRaw = null;
+
+/**
+ * 根据原始白名单数组重建内存索引（精确集合 + 通配符数组）
+ * @param {string[]} list
+ */
+function _buildWhitelistIndexes(list) {
+  const exact = new Set();
+  const patterns = [];
+  for (const entry of (list || [])) {
+    const norm = normalizeWhitelistEntry(entry);
+    if (!norm) continue;
+    if (isWildcardPattern(norm)) patterns.push(norm);
+    else exact.add(norm);
+  }
+  _whitelistExact = exact;
+  _whitelistPatterns = patterns;
+  _whitelistRaw = list || [];
+}
+
+/**
+ * 从存储加载白名单（优先返回内存缓存）
+ * @returns {Promise<string[]>}
+ */
+async function loadWhitelist() {
+  if (_whitelistExact !== null) {
+    return [..._whitelistRaw];
+  }
+  try {
+    const r = await chrome.storage.local.get(STORAGE_KEYS.WHITELIST);
+    const list = r[STORAGE_KEYS.WHITELIST] || [];
+    _buildWhitelistIndexes(list);
+    return list;
+  } catch (e) { return []; }
+}
+
+/** 使白名单内存缓存失效，下次 loadWhitelist 重新从存储读取 */
+function _invalidateWhitelistCache() {
+  _whitelistExact = null;
+  _whitelistPatterns = null;
+  _whitelistRaw = null;
+}
+
+async function saveWhitelist(whitelist) {
+  try {
+    // 规范化 + 去重，保证存储中的条目形式统一（小写、无协议/路径/尾点）
+    const normalized = [...new Set(
+      (whitelist || []).map(d => normalizeWhitelistEntry(d)).filter(Boolean)
+    )];
+    await chrome.storage.local.set({ [STORAGE_KEYS.WHITELIST]: normalized });
+    // 同步更新内存缓存索引
+    _buildWhitelistIndexes(normalized);
+  } catch (e) { /* ignore */ }
+}
+
+/**
+ * 检查URL对应域名是否在白名单中
+ * 优化：优先 O(1) 精确集合查找，未命中再线性匹配通配符条目，避免每次异步读存储
+ */
+async function isWhitelisted(url) {
+  const domain = UrlUtils.extractHostname(url);
+  if (_whitelistExact !== null) {
+    if (_whitelistExact.has(domain.toLowerCase())) return true;
+    for (const p of _whitelistPatterns) {
+      if (matchWhitelistEntry(domain, p)) return true;
+    }
+    return false;
+  }
+  const whitelist = await loadWhitelist();
+  return isWhitelistedDomain(domain, whitelist);
+}
+
+/**
+ * 将域名加入白名单（支持传入通配符条目，例如 "*.example.com"）
+ */
+async function addToWhitelist(url) {
+  const entry = normalizeWhitelistEntry(UrlUtils.extractHostname(url));
+  if (!entry) return;
+
+  // 白名单与黑名单互斥：仅对精确域名执行黑名单移除；通配符条目不针对具体黑名单域名操作
+  if (!isWildcardPattern(entry)) {
+    await SiteBlacklist.remove(entry);
+  }
+
+  // 先用内存缓存快速判断，避免无谓的存储读取
+  if (_whitelistRaw && _whitelistRaw.some(d => normalizeWhitelistEntry(d) === entry)) {
+    console.log('[ServiceWorker] 域名已在白名单:', entry);
+    return;
+  }
+  const whitelist = await loadWhitelist();
+  if (!whitelist.some(d => normalizeWhitelistEntry(d) === entry)) {
+    whitelist.push(entry);
+    await saveWhitelist(whitelist);
+    console.log('[ServiceWorker] 已加入白名单:', entry);
+  }
+}
+
+/**
+ * 将域名从白名单移除
+ * 优先精确移除；若没有精确条目，则移除覆盖该域名的一个通配符条目
+ * （例如白名单含 *.example.com 时，对 sub.example.com 执行移除会删掉 *.example.com）
+ */
+async function removeFromWhitelist(url) {
+  const entry = normalizeWhitelistEntry(UrlUtils.extractHostname(url));
+  if (!entry) return;
+  const whitelist = await loadWhitelist();
+  let idx = whitelist.findIndex(d => normalizeWhitelistEntry(d) === entry);
+  if (idx === -1) {
+    idx = whitelist.findIndex(d => {
+      const norm = normalizeWhitelistEntry(d);
+      return isWildcardPattern(norm) && matchWhitelistEntry(entry, norm);
+    });
+  }
+  if (idx !== -1) {
+    const removed = whitelist[idx];
+    whitelist.splice(idx, 1);
+    await saveWhitelist(whitelist);
+    console.log('[ServiceWorker] 已移出白名单:', removed);
+  }
+}
+
+/**
+ * 从白名单数组中过滤掉指定域名：精确匹配项或覆盖该域的通配符项都会被移除
+ * @param {string[]} list
+ * @param {string} domain
+ * @returns {string[]} 过滤后的新数组
+ */
+function _filterWhitelistOutDomain(list, domain) {
+  const norm = normalizeWhitelistEntry(domain);
+  if (!norm) return list;
+  return (list || []).filter(d => {
+    const e = normalizeWhitelistEntry(d);
+    if (e === norm) return false;
+    if (isWildcardPattern(e) && matchWhitelistEntry(norm, e)) return false;
+    return true;
+  });
+}
+
 /**
  * 加载全局设置，与默认值合并确保所有键存在。
  * 当前包含：
@@ -495,9 +684,13 @@ async function loadGlobalSettings() {
   try {
     const r = await chrome.storage.local.get(STORAGE_KEYS.GLOBAL_SETTINGS);
     const stored = r[STORAGE_KEYS.GLOBAL_SETTINGS] || {};
-    const settings = { ...SETTINGS_DEFAULTS, ...stored };
-    const preset = SENSITIVITY_PRESETS[settings.sensitivityPreset];
-    return { ...settings, ...(preset?.overrides || {}) };
+    // Schema 迁移：旧版本设置自动升级（如 v1→v2 修正 apihz 键名），写回存储
+    const migrated = migrateSettings(stored);
+    if (migrated !== stored) {
+      await chrome.storage.local.set({ [STORAGE_KEYS.GLOBAL_SETTINGS]: migrated });
+    }
+    // 合并默认值：新版本新增的键自动获得默认值
+    return { ...SETTINGS_DEFAULTS, ...migrated };
   } catch (e) {
     return { ...SETTINGS_DEFAULTS };
   }
@@ -506,254 +699,6 @@ async function loadGlobalSettings() {
 // ==================== 高危响应流程 ====================
 
 const _authenticationTabs = new Set();
-const _navigationGenerations = new Map();
-const _navigationStates = new Map();
-const _lastCommittedHttpUrls = new Map();
-const RISK_NOTIFICATION_KEY_PREFIX = 'risk_notification:';
-const RISK_NOTIFICATION_TTL_MS = 30 * 60 * 1000;
-const RISK_NOTIFICATION_DISPLAY_MS = 5000;
-const _riskNotificationConsumptions = new Map();
-const _automaticReportOpenings = new Map();
-let _riskNotificationQueue = Promise.resolve();
-
-function getRiskNotificationStorage() {
-  return chrome.storage.session || chrome.storage.local;
-}
-
-function getRiskNotificationStorageKey(notificationId) {
-  return RISK_NOTIFICATION_KEY_PREFIX + notificationId;
-}
-
-async function removeRiskNotificationContext(notificationId) {
-  if (!notificationId.startsWith('risk:')) return;
-  await getRiskNotificationStorage()
-    .remove(getRiskNotificationStorageKey(notificationId))
-    .catch(() => {});
-}
-
-function queueRiskNotificationContext(notificationId, operation) {
-  const previous = _riskNotificationConsumptions.get(notificationId) || Promise.resolve();
-  const task = previous.catch(() => {}).then(operation);
-  _riskNotificationConsumptions.set(notificationId, task);
-  return (async () => {
-    try {
-      return await task;
-    } finally {
-      if (_riskNotificationConsumptions.get(notificationId) === task) {
-        _riskNotificationConsumptions.delete(notificationId);
-      }
-    }
-  })();
-}
-
-function scheduleRiskNotificationContextCleanup(notificationId) {
-  setTimeout(() => {
-    queueRiskNotificationContext(notificationId, async () => {
-      const visible = await chrome.notifications.getAll().catch(() => ({}));
-      if (!visible[notificationId]) await removeRiskNotificationContext(notificationId);
-    });
-  }, 300);
-}
-
-/**
- * 串行取出一次性通知上下文，避免同一通知被重复处理。
- * @param {string} notificationId 通知 ID
- * @returns {Promise<Object|null>} 未过期的通知上下文
- */
-async function takeRiskNotificationContext(notificationId) {
-  if (!notificationId.startsWith('risk:')) return null;
-  return queueRiskNotificationContext(notificationId, async () => {
-    const storage = getRiskNotificationStorage();
-    const key = getRiskNotificationStorageKey(notificationId);
-    const stored = await storage.get(key);
-    await storage.remove(key);
-    const context = stored[key];
-    if (!context || Date.now() - context.createdAt > RISK_NOTIFICATION_TTL_MS) return null;
-    return context;
-  });
-}
-
-/**
- * 发送与危险标签页绑定的桌面风险通知。
- * @param {number} tabId 危险标签页 ID
- * @param {Object} tabState 当前风险状态
- * @returns {Promise<boolean>} 通知是否成功创建
- */
-async function showDesktopRiskNotification(tabId, tabState) {
-  const task = _riskNotificationQueue.catch(() => {}).then(async () => {
-    let notificationId = '';
-    try {
-      if (typeof chrome.notifications.getPermissionLevel === 'function') {
-        const permission = await chrome.notifications.getPermissionLevel();
-        if (permission !== 'granted') {
-          console.warn('[ServiceWorker] 桌面通知权限未开启:', permission);
-          return false;
-        }
-      }
-
-      const domain = tabState.domain || 'unknown';
-      notificationId = `risk:${encodeURIComponent(domain)}`;
-      const visible = await chrome.notifications.getAll();
-      const visibleRiskIds = Object.keys(visible).filter(id => id.startsWith('risk:'));
-      if (visibleRiskIds.includes(notificationId)) return false;
-
-      await Promise.all(visibleRiskIds.map(async id => {
-        await chrome.notifications.clear(id).catch(() => {});
-        scheduleRiskNotificationContextCleanup(id);
-      }));
-
-      const createdAt = Date.now();
-      await getRiskNotificationStorage().set({
-        [getRiskNotificationStorageKey(notificationId)]: {
-          tabId,
-          url: tabState.url || '',
-          domain,
-          correctUrl: tabState.correctUrl || '',
-          navigationGeneration: tabState.navigationGeneration ?? 0,
-          analysisDocumentId: tabState.analysisDocumentId || '',
-          createdAt
-        }
-      });
-      await chrome.notifications.create(notificationId, {
-        type: 'basic',
-        iconUrl: chrome.runtime.getURL('icons/icon128.png'),
-        title: '银狐木马检测 - 风险警告',
-        message: `检测到疑似钓鱼网站: ${domain}\n风险评分: ${tabState.score}分${tabState.correctUrl ? '\n正确官网: ' + tabState.correctUrl : ''}`,
-        priority: 2,
-        buttons: tabState.correctUrl ? [{ title: '前往官网' }] : [],
-        requireInteraction: false
-      });
-      setTimeout(async () => {
-        const storage = getRiskNotificationStorage();
-        const key = getRiskNotificationStorageKey(notificationId);
-        const stored = await storage.get(key).catch(() => ({}));
-        if (stored[key]?.createdAt !== createdAt) return;
-        await chrome.notifications.clear(notificationId).catch(() => {});
-        scheduleRiskNotificationContextCleanup(notificationId);
-      }, RISK_NOTIFICATION_DISPLAY_MS);
-      console.log('[ServiceWorker] 桌面风险通知已发送:', notificationId);
-      return true;
-    } catch (error) {
-      if (notificationId) await removeRiskNotificationContext(notificationId);
-      console.error('[ServiceWorker] 桌面风险通知发送失败:', error);
-      return false;
-    }
-  });
-  _riskNotificationQueue = task;
-  return task;
-}
-
-/**
- * @param {Object} tabState 标签页状态
- * @returns {{url:string,navigationGeneration:number,analysisDocumentId:string}} 文档身份
- */
-function createAnalysisIdentity(tabState) {
-  return {
-    url: tabState.url || '',
-    navigationGeneration: tabState.navigationGeneration ?? 0,
-    analysisDocumentId: tabState.analysisDocumentId || ''
-  };
-}
-
-/**
- * @param {Object} expected 预期文档身份
- * @param {Object} current 当前文档身份
- * @returns {boolean} 是否为同一次导航中的同一文档
- */
-function matchesAnalysisIdentity(expected, current) {
-  return expected.url === current.url &&
-    expected.navigationGeneration === current.navigationGeneration &&
-    expected.analysisDocumentId === current.analysisDocumentId;
-}
-
-/**
- * @param {Object} tabState 标签页状态
- * @param {Object} expected 预期文档身份
- * @returns {boolean}
- */
-function tabStateMatchesAnalysisIdentity(tabState, expected) {
-  return matchesAnalysisIdentity(expected, createAnalysisIdentity(tabState));
-}
-
-/**
- * @param {number} tabId 标签页 ID
- * @returns {Promise<{url:string,navigationGeneration:number,analysisDocumentId:string}>}
- */
-async function getCurrentAnalysisIdentity(tabId) {
-  const navigation = _navigationStates.get(tabId);
-  const tab = await chrome.tabs.get(tabId);
-  const frame = await chrome.webNavigation.getFrame({ tabId, frameId: 0 }).catch(() => null);
-  return {
-    url: frame?.url || tab.url || '',
-    navigationGeneration: _navigationGenerations.get(tabId) ?? navigation?.generation ?? 0,
-    analysisDocumentId: frame?.documentId || navigation?.documentId || ''
-  };
-}
-
-/**
- * 校验异步结果是否仍属于当前文档。
- * @param {number} tabId 标签页 ID
- * @param {Object} expected 预期文档身份
- * @param {{allowWarningPage?:boolean,allowPending?:boolean}} [options] 预检与警告页兼容选项
- * @returns {Promise<boolean>}
- */
-async function isCurrentAnalysisIdentity(tabId, expected, options = {}) {
-  try {
-    const tab = await chrome.tabs.get(tabId);
-    if (options.allowWarningPage &&
-        (isWarningPageUrl(tab.url || '') || isWarningPageUrl(tab.pendingUrl || ''))) {
-      const tabState = await loadTabState(tabId);
-      return tabState._blockedContext?.url === expected.url;
-    }
-
-    const navigation = _navigationStates.get(tabId);
-    if (options.allowPending && navigation?.generation === expected.navigationGeneration &&
-        navigation.url === expected.url) {
-      if (!navigation.committed) return true;
-      const current = await getCurrentAnalysisIdentity(tabId);
-      return current.url === expected.url &&
-        current.navigationGeneration === expected.navigationGeneration &&
-        current.analysisDocumentId === (navigation.documentId || current.analysisDocumentId);
-    }
-
-    const current = await getCurrentAnalysisIdentity(tabId);
-    return matchesAnalysisIdentity(expected, current);
-  } catch {
-    return false;
-  }
-}
-
-/**
- * 仅在文档身份仍有效时保存异步分析结果。
- * @param {number} tabId 标签页 ID
- * @param {Object} tabState 待保存状态
- * @param {Object} identity 预期文档身份
- * @returns {Promise<boolean>} 保存后文档是否仍有效
- */
-async function saveAnalysisStateIfCurrent(tabId, tabState, identity) {
-  if (!await isCurrentAnalysisIdentity(tabId, identity)) return false;
-  await saveTabState(tabId, tabState);
-  return isCurrentAnalysisIdentity(tabId, identity);
-}
-
-/**
- * 写入当前文档的域名缓存；导航过期时按令牌撤销本次写入。
- * @param {number} tabId 标签页 ID
- * @param {Object} identity 预期文档身份
- * @param {string} domain 域名
- * @param {Object} data 缓存数据
- * @returns {Promise<boolean>} 缓存是否保持有效
- */
-async function cacheAnalysisIfCurrent(tabId, identity, domain, data) {
-  if (!await isCurrentAnalysisIdentity(tabId, identity)) return false;
-  const writeToken = createBlockedNonce();
-  await CacheManager.set(domain, { ...data, writeToken });
-  if (await isCurrentAnalysisIdentity(tabId, identity)) return true;
-
-  const cached = await CacheManager.get(domain);
-  if (cached?.writeToken === writeToken) await CacheManager.remove(domain);
-  return false;
-}
 
 /**
  * 触发高危响应：
@@ -819,7 +764,34 @@ async function triggerWarningFlow(tabId, tabState, stage = 'postload') {
     await openRiskReport(tabId, tabState, { automatic: true, stage });
   }
 
-  console.log('[ServiceWorker] 已保留原网页并显示置顶警告:', { domain, score, correctUrl });
+  // 去重检查：同标签页冷却期内跳过通知和弹窗
+  const cooldownMs = getEffectiveThreshold('warning_cooldownMs', WARNING_COOLDOWN_MS);
+  const lastTime = _warningCooldown.get(tabId) || 0;
+  if (now - lastTime < cooldownMs) {
+    console.log('[ServiceWorker] ⚠️ 冷却期内，跳过重复弹窗:', domain);
+    return;
+  }
+  _warningCooldown.set(tabId, now);
+
+  // 4. 桌面通知（可通过设置关闭）
+  if (settings.desktopNotifications !== false) {
+    chrome.notifications.create({
+      type: 'basic',
+      iconUrl: 'icons/icon128.png',
+      title: '⚠️ 银狐木马检测 - 风险警告',
+      message: `检测到疑似钓鱼网站: ${domain}\n风险评分: ${score}分${correctUrl ? '\n正确官网: ' + correctUrl : ''}`,
+      priority: 2,
+      buttons: correctUrl ? [{ title: '✅ 前往官网' }] : [],
+      requireInteraction: true
+    }).catch(() => {});
+  }
+
+  // 5. 创建警告窗口（可通过设置关闭）
+  if (settings.showWarningWindow !== false) {
+    openWarningWindow(tabState);
+  }
+
+  console.log('[ServiceWorker] ⚠️ 高危响应已触发:', { domain, score, correctUrl });
 }
 
 /**
@@ -827,7 +799,7 @@ async function triggerWarningFlow(tabId, tabState, stage = 'postload') {
  *
  * @param {number} tabId - 标签页 ID
  * @param {string[]} archiveUrls - 已知的压缩包下载链接 URL 列表
- * @param {string} [mode='full'] - 注入模式: 'lightweight' | 'standard' | 'full'
+ * @param {string} [mode='full'] - 注入模式（档位机制已实现，当前调用方恒传 'full'）
  */
 async function injectDownloadBlocker(tabId, archiveUrls = [], mode = 'full') {
   const settings = await loadGlobalSettings();
@@ -842,7 +814,15 @@ async function injectDownloadBlocker(tabId, archiveUrls = [], mode = 'full') {
     await chrome.scripting.executeScript({
       target: { tabId },
       func: injectBlockerFunc,
-      args: [archiveUrls, settings.detectNonArchiveFiles, mode],
+      // 扩展名/关键词列表从 constants.js 并集生成传入（页面注入函数保持自包含，附字面量兜底）
+      args: [archiveUrls, settings.detectNonArchiveFiles, mode, {
+        archives: ARCHIVE_EXTENSIONS,
+        executables: EXECUTABLE_EXTENSIONS,
+        downloadKeywords: DOWNLOAD_INTENT_KEYWORDS,
+        // 注：注入函数经 executeScript 序列化执行，闭包不保留，
+        // 所有模块级常量必须经 args 显式传入（历史回归点：BLOCKER_OBSERVER_LIFETIME_MS）
+        observerLifetimeMs: BLOCKER_OBSERVER_LIFETIME_MS
+      }],
       injectImmediately: true
     }).catch(e => console.error('[ServiceWorker] 注入拦截脚本失败:', e));
   } catch (e) {
@@ -1234,20 +1214,29 @@ function removeDownloadBlockerFunc() {
 
   delete window.__virusDetectorBlockerState;
   delete window.__virusDetectorInjected;
-  delete window.__virusDetectorInjectedRank;
+  delete window.__virusDetectorInjectedRank; // 必须一并清理，否则重新注入被 rank 守卫拦截
 }
 
 /**
  * 注入到页面的拦截函数（独立定义以支持 args 传递）
  * @param {string[]} archiveUrls - 已知压缩包链接
+ * @param {boolean} detectNonArchive - 是否检测非压缩包可执行文件
+ * @param {string} mode - 注入模式 'lightweight' | 'standard' | 'full'（档位机制已实现，当前调用方恒传 'full'）
+ * @param {Object} [extLists] - 扩展名/关键词列表（由 SW 从 constants.js 并集生成传入）
  */
-function injectBlockerFunc(archiveUrls, detectNonArchive, mode) {
-  // mode: 注入模式 — 'lightweight' (≥50) | 'standard' (≥80) | 'full' (≥100, 默认)
-  // detectNonArchive: 是否检测非压缩包可执行文件（默认 false，由设置页控制）
+function injectBlockerFunc(archiveUrls, detectNonArchive, mode, extLists) {
   detectNonArchive = detectNonArchive || false;
   mode = mode || 'full';
 
-  // 避免重复注入
+  // 避免重复注入：使用排名制守卫，允许从低等级升级到高等级。
+  // 注意：rank 检查必须先于 __virusDetectorInjected 检查——
+  // 若先检查 injected，则「移除拦截后重新注入」会被 rank 残留拦截，
+  // 导致条幅/拦截在重新检测时永久失效（历史缺陷）。
+  var MODE_RANK = { lightweight: 1, standard: 2, full: 3 };
+  var newRank = MODE_RANK[mode] || 3;
+  var existingRank = window.__virusDetectorInjectedRank || 0;
+  if (existingRank >= newRank) return;
+
   if (window.__virusDetectorBlockerState || window.__virusDetectorInjected) return;
   var blockerState = {
     anchorClick: null,
@@ -1259,22 +1248,42 @@ function injectBlockerFunc(archiveUrls, detectNonArchive, mode) {
   };
   window.__virusDetectorBlockerState = blockerState;
   window.__virusDetectorInjected = true;
-  // 避免重复注入：使用排名制守卫，允许从低等级升级到高等级
-  var MODE_RANK = { lightweight: 1, standard: 2, full: 3 };
-  var newRank = MODE_RANK[mode] || 3;
-  var existingRank = window.__virusDetectorInjectedRank || 0;
-  if (existingRank >= newRank) return;
   window.__virusDetectorInjectedRank = newRank;
 
   // ══════════════════════════════════════════════════════
   // Part 0: JS 级别下载拦截（对抗 IDM 绕过 & 自动下载）
   // ══════════════════════════════════════════════════════
 
-  // 危险扩展名列表（用于各级拦截）
-  var ALL_DANGEROUS_EXTS = ['.zip', '.rar', '.7z', '.tar', '.gz', '.tar.gz', '.tgz',
-    '.bz2', '.xz', '.z', '.iso', '.cab', '.arj', '.lzh', '.tar.bz2', '.tar.xz', '.zst',
+  // 扩展名/关键词列表：优先取 SW 传入的 extLists（来自 constants.js 并集），
+  // 其次 MAIN world 的 window.VT_CONSTANTS 镜像，最后字面量兜底（防注入顺序异常）
+  var C = (typeof window !== 'undefined' && window.VT_CONSTANTS) || {};
+
+  // 压缩包扩展名（始终检测；并集含 .gz2/.img/.dmg）
+  var ARCHIVE_EXTS = (extLists && extLists.archives) || C.ARCHIVE_EXTENSIONS || [
+    '.zip', '.rar', '.7z', '.tar', '.gz', '.tar.gz', '.tgz',
+    '.bz2', '.xz', '.z', '.iso', '.cab', '.arj', '.lzh',
+    '.tar.bz2', '.tar.xz', '.gz2', '.zst', '.img', '.dmg'
+  ];
+
+  // 非压缩包可执行文件扩展名（由 detectNonArchive 开关控制）
+  var NON_ARCHIVE_EXE_EXTS = (extLists && extLists.executables) || C.EXECUTABLE_EXTENSIONS || [
     '.exe', '.msi', '.dmg', '.apk', '.appx', '.deb', '.rpm',
-    '.bat', '.cmd', '.ps1', '.vbs', '.scr', '.jar', '.bin', '.run', '.sh', '.pkg'];
+    '.bat', '.cmd', '.ps1', '.vbs', '.scr', '.jar', '.bin', '.run', '.sh', '.pkg'
+  ];
+
+  // 全部危险扩展名（用于各级拦截与视觉禁用，不受开关影响）
+  var ALL_DANGEROUS_EXTS = ARCHIVE_EXTS.concat(NON_ARCHIVE_EXE_EXTS);
+
+  // 下载相关中英文关键词（用于匹配按钮文本和下载意图；并集统一小写）
+  var DOWNLOAD_KEYWORDS = (extLists && extLists.downloadKeywords) || C.DOWNLOAD_INTENT_KEYWORDS || [
+    '下载', 'download', '下載', '立即下载', '免费下载', '高速下载',
+    '安全下载', '点击下载', '直接下载', '本地下载', '官方下载',
+    'download now', 'free download', 'download free',
+    '立即安装', '一键安装', '安装包',
+    'down', 'dl', 'get', 'setup', 'install', 'free', 'app',
+    'exe', 'msi', 'dmg', 'apk', 'zip', 'rar', '7z',
+    'get started', 'ダウンロード'
+  ];
 
   function _isDangerousHref(href) {
     if (!href || typeof href !== 'string') return false;
@@ -1356,7 +1365,7 @@ function injectBlockerFunc(archiveUrls, detectNonArchive, mode) {
   } catch (e) { /* createElement hook 失败时静默降级 */ }
 
   // ══════════════════════════════════════════════════════
-  // Part 1: 已知压缩包链接精准匹配（新版能力）
+  // Part 1: 已知压缩包链接精准匹配
   // ══════════════════════════════════════════════════════
   var knownArchiveSet = new Set();
   if (archiveUrls && archiveUrls.length) {
@@ -1367,25 +1376,9 @@ function injectBlockerFunc(archiveUrls, detectNonArchive, mode) {
     }
   }
 
-  // 压缩包扩展名（始终检测）
-  var ARCHIVE_EXTS = ['.zip', '.rar', '.7z', '.tar', '.gz', '.tar.gz', '.tgz',
-    '.bz2', '.xz', '.z', '.iso', '.cab', '.arj', '.lzh', '.tar.bz2', '.tar.xz', '.zst'];
-
-  // 非压缩包可执行文件扩展名（由 detectNonArchive 开关控制）
-  var NON_ARCHIVE_EXE_EXTS = ['.exe', '.msi', '.dmg', '.apk', '.appx', '.deb', '.rpm',
-    '.bat', '.cmd', '.ps1', '.vbs', '.scr', '.jar', '.bin', '.run', '.sh', '.pkg'];
-
-  // 全部危险扩展名（用于视觉禁用，不受开关影响）
-  var DANGEROUS_EXTS = ARCHIVE_EXTS.concat(NON_ARCHIVE_EXE_EXTS);
-
-  // 下载相关中英文关键词（用于匹配按钮文本和下载意图）
-  var DOWNLOAD_KEYWORDS = [
-    '下载', 'download', '下載', 'ダウンロード',
-    '立即安装', '立即下载', '免费下载', '高速下载', '安全下载',
-    '点击下载', '直接下载', '本地下载', '官方下载',
-    'Download Now', 'Free Download', 'Download Free',
-    'install', 'setup', 'get started'
-  ];
+  // 全部危险扩展名（用于视觉禁用，不受开关影响）— ARCHIVE_EXTS/NON_ARCHIVE_EXE_EXTS/DOWNLOAD_KEYWORDS
+  // 已在 Part 0 定义（优先取 SW 传入的 extLists，来自 constants.js 并集）
+  var DANGEROUS_EXTS = ALL_DANGEROUS_EXTS;
 
   // ══════════════════════════════════════════════════════
   // Part 2: 辅助函数
@@ -1425,7 +1418,7 @@ function injectBlockerFunc(archiveUrls, detectNonArchive, mode) {
   }
 
   // ══════════════════════════════════════════════════════
-  // Part 3: 移除 download 属性 + 视觉禁用下载元素（旧版能力）
+  // Part 3: 移除 download 属性 + 视觉禁用下载元素
   // 'lightweight' 模式下跳过（仅 JS hooks + click 拦截，无视觉禁用）
   // ══════════════════════════════════════════════════════
 
@@ -1481,7 +1474,7 @@ function injectBlockerFunc(archiveUrls, detectNonArchive, mode) {
   }
 
   // ══════════════════════════════════════════════════════
-  // Part 4: 全局点击拦截 — 双层（新版精准 + 旧版宽泛）
+  // Part 4: 全局点击拦截 — 双层（精准 + 宽泛）
   // ══════════════════════════════════════════════════════
 
   var _clickHandler = function(e) {
@@ -1491,7 +1484,7 @@ function injectBlockerFunc(archiveUrls, detectNonArchive, mode) {
     var shouldBlock = false;
     var blockReason = '';
 
-    // 检查1（新版精准）: href 指向已知的压缩包链接
+    // 检查1（精准）: href 指向已知的压缩包链接
     if (target.tagName === 'A' && target.href) {
       var rawHref = target.href;
       if (isKnownArchiveUrl(rawHref)) {
@@ -1512,13 +1505,13 @@ function injectBlockerFunc(archiveUrls, detectNonArchive, mode) {
       }
     }
 
-    // 检查3（旧版宽泛）: 元素文本包含下载关键词
+    // 检查3（宽泛）: 元素文本包含下载关键词
     if (!shouldBlock && hasDownloadIntent(target)) {
       shouldBlock = true;
       blockReason = 'download_intent';
     }
 
-    // 检查4（旧版宽泛）: 父级元素在下载容器中
+    // 检查4（宽泛）: 父级元素在下载容器中
     if (!shouldBlock) {
       var parent = target.closest('[class*="download"], [id*="download"], ' +
         '[class*="btn-dl"], [class*="btn_dl"]');
@@ -1547,7 +1540,7 @@ function injectBlockerFunc(archiveUrls, detectNonArchive, mode) {
   document.addEventListener('click', _clickHandler, true);
 
   // ══════════════════════════════════════════════════════
-  // Part 5: MutationObserver 动态监控（旧版能力）
+  // Part 5: MutationObserver 动态监控
   // ══════════════════════════════════════════════════════
   var observer = new MutationObserver(function() {
     disableExistingDownloadButtons();
@@ -1556,8 +1549,9 @@ function injectBlockerFunc(archiveUrls, detectNonArchive, mode) {
 
   if (document.body) {
     observer.observe(document.body, { childList: true, subtree: true });
-    // 30 秒后停止观察（避免性能影响）
-    setTimeout(function() { observer.disconnect(); }, 30000);
+    // 30 秒后停止观察（避免性能影响）；值经 args 传入（闭包不保留，禁止引用模块常量）
+    setTimeout(function() { observer.disconnect(); },
+      (extLists && extLists.observerLifetimeMs) || 30000);
   }
 
 }
@@ -1763,6 +1757,19 @@ async function analyzePage(tabId, url, domain, pageMetrics, linkMetrics) {
     return;
   }
 
+  // 完全信任域名检查：政府/教育机构域名（.gov.cn / .edu.cn 等）跳过所有检测
+  if (isFullyTrusted(domain)) {
+    console.log('[ServiceWorker] 完全信任域名，跳过所有检测:', domain);
+    tabState.isAnalyzed = true;
+    tabState.url = url;
+    tabState.domain = domain;
+    tabState.score = 0;
+    tabState.riskLevel = RISK_LEVEL.SAFE;
+    await saveTabState(tabId, tabState);
+    setIconGreen(tabId, 0);
+    return;
+  }
+
   tabState.isWhitelisted = false;
 
   // 站点黑名单检查：如果在站点黑名单中，直接赋予高分触发警告流程
@@ -1795,7 +1802,7 @@ async function analyzePage(tabId, url, domain, pageMetrics, linkMetrics) {
   // 是否有来自 Content Script 的新数据
   const hasFreshData = !!(pageMetrics || linkMetrics);
 
-  // 缓存检查（仅当无新数据时才使用缓存，避免用不含规则四/五的结果拦截更新）
+  // ==================== Gate 预评估阶段（无 Content Script 数据） ====================
   if (!hasFreshData) {
     const cached = await CacheManager.get(domain);
     if (cached) {
@@ -1820,29 +1827,141 @@ async function analyzePage(tabId, url, domain, pageMetrics, linkMetrics) {
       }
       return;
     }
+
+    // 无缓存 + 无 Content Script 数据 → 预评估阶段
+    // 仅运行 Rule 1（域名仿冒）+ 发起 Whois 查询（异步不等待）
+    console.log('[ServiceWorker] Gate 预评估阶段（等待 Content Script 数据）:', domain);
+    const rule1Result = ScoringEngine.evaluateRule1Only(domain);
+    const whoisPromise = WhoisClient.lookup(domain).catch(() => null);
+
+    tabState._gatePhase = 'preliminary';
+    tabState._rule1Result = rule1Result;
+    tabState._preliminaryScore = rule1Result.score;
+    tabState.url = url;
+    tabState.domain = domain;
+    tabState.ruleResults = { rule1: rule1Result };
+    tabState.lastAnalyzed = Date.now();
+    // Promise 不可序列化到 storage，存入内存 Map
+    _whoisPromises.set(tabId, whoisPromise);
+    await saveTabState(tabId, tabState);
+
+    setIconNeutral(tabId);
+    scheduleGateTimeout(tabId, domain);
+    return;
   }
 
-  // 构建页面上下文（不再需要SSL检测）
-  // Resource Resolver：从 resourceData 构建 ResourceGraph（L0 检测，异步不阻塞）
+  // ==================== Gate 权威阶段（有 Content Script 数据） ====================
+  cancelGateTimeout(tabId);
+  tabState._gatePhase = 'resolved';
+
+  // 读取 Gate 判定结果（Content Script 计算）
+  let needsDetection = !!(tabState._needsDetection);
+
+  // Resource Resolver 覆盖 Gate：若发现隐藏归档链接，强制视为需要检测
   let resourceGraph = null;
   const resourceData = tabState._resourceData || null;
   if (resourceData) {
     try {
       resourceGraph = await ResourceResolver.resolve(url || tabState.url, resourceData);
-      // 缓存到 tabState 供下载事件等后续使用
       tabState._resourceGraph = resourceGraph;
+      if (!needsDetection && resourceGraph && resourceGraph.discoveredArchives &&
+          resourceGraph.discoveredArchives.length > 0) {
+        console.log('[ServiceWorker] ResourceResolver 发现隐藏归档链接，Gate 覆盖为通过:', domain);
+        needsDetection = true;
+      }
     } catch (e) {
       console.warn('[ServiceWorker] ResourceResolver 解析失败（不影响检测）:', e.message);
-      resourceGraph = null;
     }
   }
 
-  // ─── ICP 备案 API 核验已改为异步（见 _launchAsyncIcpCheck）───
-  // 同步阶段仅依赖页面文本扫描给出规则三评分，避免 API 网络延迟（最长 16s）
-  // 拖慢整站检测。API 核验结果通过异步回调增量修正评分。
+  const settings = await getSettings();
+
+  // ==================== Gate 失败：仅 Rule 1 + Whois（域名年龄完整贡献，无上限） ====================
+  if (!needsDetection) {
+    console.log('[ServiceWorker] Gate 未通过，跳过完整检测:', domain);
+
+    const savedWhoisPromise = _whoisPromises.get(tabId);
+    const whoisResult = await (savedWhoisPromise || WhoisClient.lookup(domain).catch(() => null));
+    _whoisPromises.delete(tabId);
+
+    // 合并预评估阶段的 Rule 1 结果；
+    // 若已有 Content Script 数据（title），用联动评分重算，补齐「内容声称品牌」信号
+    // （Gate 失败路径不跑规则三，ICP 联动保持中性，仅 title/域名年龄联动生效）
+    const baseRule1 = tabState._rule1Result || ScoringEngine.evaluateRule1Only(domain);
+    let rule1Result = baseRule1;
+    if (tabState.title) {
+      rule1Result = ScoringEngine.evaluateRule1Only(domain, {
+        icpResult: null,
+        title: tabState.title,
+        linkMetrics: null,
+        creationDays: (whoisResult && whoisResult.creationDays >= 0) ? whoisResult.creationDays : -1
+      });
+    }
+
+    // 复用评分引擎的域名年龄计算（不重复写 S 衰减公式）
+    const syncDomainAgeResult = {
+      score: 0, triggered: false, status: 'pass',
+      detail: '', detailCN: '域名年龄: 等待查询',
+      creationDays: (whoisResult && whoisResult.creationDays >= 0) ? whoisResult.creationDays : -1
+    };
+    const domainAgePart = await ScoringEngine.evaluateDomainAgePart(
+      domain, rule1Result.score, syncDomainAgeResult, false, settings
+    );
+
+    // 域名年龄不受 Gate 影响，完整贡献分数（无上限）
+    const finalScore = Math.max(0, rule1Result.score +
+      domainAgePart.domainAgeResult.score + domainAgePart.ageBonusResult.score);
+
+    const threshold = getEffectiveThreshold('scoreThreshold', SCORE_THRESHOLD);
+    tabState.score = finalScore;
+    tabState.riskLevel = finalScore >= threshold ? RISK_LEVEL.WARNING : RISK_LEVEL.SAFE;
+    tabState.isAnalyzed = true;
+    tabState.correctUrl = rule1Result.correctUrl || null;
+    tabState.officialName = rule1Result.officialName || null;
+    tabState.ruleResults = {
+      rule1: rule1Result,
+      rule2: { score: 0, triggered: false, status: 'pass', detail: 'Gate 未通过，跳过下载检测', detailCN: '下载检测: 跳过（无下载特征）' },
+      rule3: { score: 0, triggered: false, status: 'neutral', detail: 'Gate 未通过，跳过ICP检测', detailCN: 'ICP备案: 跳过（无下载特征）' },
+      rule4: { score: 0, triggered: false, status: 'pass', detail: 'Gate 未通过，跳过链接分析', detailCN: '链接分析: 跳过（无下载特征）' },
+      rule5: { score: 0, triggered: false, status: 'pass', detail: 'Gate 未通过，跳过代码工程化', detailCN: '代码工程化: 跳过（无下载特征）' },
+      domainAge: domainAgePart.domainAgeResult,
+      ageBonus: domainAgePart.ageBonusResult,
+      downloadLink: { score: 0, triggered: false, status: 'pass', detail: 'Gate 未通过，跳过跨域检测', detailCN: '下载链接: 跳过' }
+    };
+    tabState.lastAnalyzed = Date.now();
+    if (pageMetrics) tabState.pageMetrics = pageMetrics;
+    if (linkMetrics) tabState.linkMetrics = linkMetrics;
+
+    await saveTabState(tabId, tabState);
+    await CacheManager.set(domain, {
+      score: finalScore,
+      isMalicious: finalScore >= threshold,
+      gateFailed: true,
+      correctUrl: rule1Result.correctUrl || null,
+      ruleResults: sanitizeRuleResultsForCache(tabState.ruleResults)
+    });
+
+    if (finalScore >= threshold) {
+      setIconRed(tabId);
+      await triggerWarningFlow(tabId, tabState);
+      console.log('[ServiceWorker] Gate 失败但域名检测触发警告:', { domain, finalScore });
+    } else {
+      setIconGreen(tabId, finalScore);
+      console.log('[ServiceWorker] Gate 失败，显示绿色图标:', { domain, finalScore });
+    }
+    return;
+  }
+
+  // ==================== Gate 通过：完整检测 ====================
+  // 清理预评估阶段保留的 Whois Promise（已缓存到 WhoisClient，不再需要）
+  _whoisPromises.delete(tabId);
+  console.log('[ServiceWorker] Gate 通过，运行完整检测:', domain);
+
   const ctx = {
     url: tabState.url || url,
     domain: tabState.domain || domain,
+    title: tabState.title || '',
+    brandSignals: tabState.brandSignals || null,
     icpStrings: tabState.icpStrings || [],
     textSignals: tabState.textSignals || null,
     hasIcpGovLink: tabState.hasIcpGovLink || false,
@@ -1898,7 +2017,7 @@ async function analyzePage(tabId, url, domain, pageMetrics, linkMetrics) {
 
     // ═══ 阶段2：异步 Whois 域名年龄补充（不阻塞主流程） ═══
     if (tabState._whoisPending) {
-      // 保存上下文用于异步回调中的竞态检查
+      // 保存上下文用于异步回调中的竞态检查与联动重评
       const ctxSnapshot = {
         domain, tabId, url: tabState.url || url,
         navigationGeneration: tabState.navigationGeneration ?? 0,
@@ -1909,7 +2028,16 @@ async function analyzePage(tabId, url, domain, pageMetrics, linkMetrics) {
         officialName: syncResult.officialName,
         isConfirmedOfficial: syncResult.isConfirmedOfficial,
         preliminaryScore: syncResult.preliminaryScore,
-        syncDomainAgeResult: syncResult._syncDomainAgeResult
+        syncDomainAgeResult: syncResult._syncDomainAgeResult,
+        // 完整评分 ctx（供 Whois 返回后的联动重评：规则三/五的老域名降权需要域名年龄）
+        title: tabState.title || '',
+        brandSignals: tabState.brandSignals || null,
+        icpStrings: tabState.icpStrings || [],
+        textSignals: tabState.textSignals || null,
+        hasIcpGovLink: tabState.hasIcpGovLink || false,
+        linkMetrics: tabState.linkMetrics || null,
+        downloadState: tabState.downloadState || { hasDownloadedArchive: false },
+        pageMetrics: tabState.pageMetrics || null
       };
 
       ScoringEngine.evaluateDomainAgePart(
@@ -1919,6 +2047,49 @@ async function analyzePage(tabId, url, domain, pageMetrics, linkMetrics) {
         syncResult.isConfirmedOfficial,
         settings
       ).then(async (whoisResult) => {
+        // 同步阶段域名年龄未知（缓存未命中，规则三/五未做年龄联动）
+        // 且 Whois 现已返回年龄 → 用完整 ctx 重评一次，补齐老域名/新域名联动，
+        // 避免「首访 50 分、刷新后 30 分」的评分随缓存漂移。
+        const ageNowKnown = whoisResult.domainAgeResult &&
+          whoisResult.domainAgeResult.creationDays >= 0;
+        const ageWasUnknown = ctxSnapshot.syncDomainAgeResult &&
+          ctxSnapshot.syncDomainAgeResult.creationDays < 0;
+        if (ageNowKnown && ageWasUnknown) {
+          try {
+            const refreshed = await ScoringEngine.evaluateSync({
+              url: ctxSnapshot.pageUrl,
+              domain: ctxSnapshot.domain,
+              title: ctxSnapshot.title,
+              brandSignals: ctxSnapshot.brandSignals,
+              icpStrings: ctxSnapshot.icpStrings,
+              textSignals: ctxSnapshot.textSignals,
+              hasIcpGovLink: ctxSnapshot.hasIcpGovLink,
+              linkMetrics: ctxSnapshot.linkMetrics,
+              downloadState: ctxSnapshot.downloadState,
+              pageMetrics: ctxSnapshot.pageMetrics
+            }, settings);
+            if (refreshed && typeof refreshed.totalScore === 'number') {
+              // 重评结果已含域名年龄与规则三/五联动 → 直接应用（跳过旧 whoisResult 的分数）
+              await _applyWhoisUpdate({
+                ...ctxSnapshot,
+                syncScore: refreshed.totalScore,
+                syncBreakdown: refreshed.breakdown,
+                correctUrl: refreshed.correctUrl || ctxSnapshot.correctUrl,
+                officialName: refreshed.officialName || ctxSnapshot.officialName
+              }, {
+                ...whoisResult,
+                totalScore: refreshed.totalScore,
+                isSuspicious: refreshed.isSuspicious,
+                riskLevel: refreshed.riskLevel,
+                domainAgeResult: refreshed._syncDomainAgeResult,
+                ageBonusResult: refreshed.breakdown.ageBonus
+              });
+              return;
+            }
+          } catch (e) {
+            console.warn('[ServiceWorker] Whois 后联动重评失败，回退原路径:', domain, e.message);
+          }
+        }
         await _applyWhoisUpdate(ctxSnapshot, whoisResult);
       }).catch(e => {
         console.error('[ServiceWorker] Whois异步补充失败:', domain, e);
@@ -1939,6 +2110,7 @@ async function analyzePage(tabId, url, domain, pageMetrics, linkMetrics) {
         analysisDocumentId: tabState.analysisDocumentId || '',
         icpStrings: tabState.icpStrings || [],
         hasIcpGovLink: tabState.hasIcpGovLink || false,
+        textSignals: tabState.textSignals || null,   // 同步阶段的中文信号，供异步 ICP 核验复用
         impersonating: syncResult.breakdown.rule1.triggered || false,
         oldRule3: {
           score: rule3Result.score || 0,
@@ -2074,8 +2246,8 @@ async function _launchAsyncIcpCheck(snapshot) {
     const icpOpts = {
       enabled: settings.icpApiEnabled !== false,
       providers: effProviders,
-      apihzId: settings.icpApiApiahzId || undefined,
-      apihzKey: settings.icpApiApiahzKey || undefined
+      apihzId: settings.icpApiApihzId || undefined,
+      apihzKey: settings.icpApiApihzKey || undefined
     };
 
     const icpApi = await IcpApiClient.query(snapshot.domain, icpOpts);
@@ -2110,31 +2282,19 @@ async function _applyIcpUpdate(snapshot, icpApi) {
   if (await SiteAccessManager.isWhitelisted(snapshot.url)) return;
 
   // 重新执行规则三（仅注入 API 结果，其余参数与同步阶段一致）
-  // 注意：同步阶段 _evaluateRule3 的 pageText 和 textSignals 均为 undefined，
-  // 此处保持一致以确保判定结果仅受 icpApi 参数影响。
+  // pageText 保持 undefined（同步阶段亦未传递）；textSignals 复用快照或标签页中已保存的中文信号
   const settings = await getSettings();
-  let newRule3;
-  try {
-    setActiveSettings(settings);
-    newRule3 = ScoringEngine._evaluateRule3(
-      domain,
-      undefined,
-      snapshot.icpStrings,
-      snapshot.hasIcpGovLink,
-      undefined,
-      icpApi,
-      snapshot.impersonating
-    );
-  } finally {
-    setActiveSettings(null);
-  }
-
-  if (!await isCurrentAnalysisIdentity(tabId, snapshot)) return;
-  const tabState = await loadTabState(tabId);
-  if (tabState.domain !== domain || !tabStateMatchesAnalysisIdentity(tabState, snapshot)) {
-    console.log('[ServiceWorker] ICP结果过期（标签页状态不匹配）:', domain);
-    return;
-  }
+  setActiveSettings(settings);
+  const newRule3 = ScoringEngine._evaluateRule3(
+    domain,
+    undefined,                       // pageText（同步阶段亦未传递）
+    snapshot.icpStrings,
+    snapshot.hasIcpGovLink,
+    snapshot.textSignals || tabState.textSignals || null,
+    icpApi,
+    snapshot.impersonating
+  );
+  setActiveSettings(null);
 
   const oldRule3Score = snapshot.oldRule3.score;
   const newRule3Score = newRule3.score || 0;
@@ -2221,6 +2381,19 @@ async function _applyIcpUpdate(snapshot, icpApi) {
  */
 async function _postReportToWorker(reportType, domain, note, reportContext = {}) {
   try {
+    // Public GitHub Issues must not include page URLs. The Worker renders rule
+    // results from an allowlist of non-sensitive fields before publishing them.
+    let score = 0;
+    let ruleResults = null;
+    try {
+      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (tabs.length > 0) {
+        const ts = await loadTabState(tabs[0].id);
+        score = ts.score || 0;
+        ruleResults = ts.ruleResults || null;
+      }
+    } catch (e) { /* 获取 tabState 失败，使用默认值 */ }
+
     const payload = {
       reportType,
       domain,
@@ -2228,8 +2401,7 @@ async function _postReportToWorker(reportType, domain, note, reportContext = {})
       version: VERSION,
       timestamp: Date.now(),
       note: note || '',
-      ruleResults: reportContext.ruleResults || null,
-      url: reportContext.url || ''
+      ruleResults
     };
 
     const response = await fetch(REPORT_API_URL, {
@@ -2477,9 +2649,8 @@ chrome.webNavigation.onCompleted.addListener(async (details) => {
   if (!await isCurrentAnalysisIdentity(tabId, completedIdentity)) return;
   await saveTabState(tabId, tabState);
 
-  // 白名单检查：如果在白名单中，直接跳过分析
-  if (await SiteAccessManager.isWhitelisted(url)) {
-    if (!await isCurrentAnalysisIdentity(tabId, completedIdentity)) return;
+  // 白名单：跳过分析
+  if (await isWhitelisted(url)) {
     tabState.isAnalyzed = true;
     tabState.isWhitelisted = true;
     tabState.score = 0;
@@ -2487,6 +2658,17 @@ chrome.webNavigation.onCompleted.addListener(async (details) => {
     await saveTabState(tabId, tabState);
     setIconWhitelist(tabId);
     console.log('[ServiceWorker] 白名单网站，跳过检测:', domain);
+    return;
+  }
+
+  // 完全信任域名：跳过检测
+  if (isFullyTrusted(domain)) {
+    tabState.isAnalyzed = true;
+    tabState.score = 0;
+    tabState.riskLevel = RISK_LEVEL.SAFE;
+    await saveTabState(tabId, tabState);
+    setIconGreen(tabId, 0);
+    console.log('[ServiceWorker] 完全信任域名，跳过检测:', domain);
     return;
   }
 
@@ -2499,7 +2681,6 @@ chrome.webNavigation.onCompleted.addListener(async (details) => {
 // 存储被拦截的下载信息，供二次确认弹窗回传时使用
 // key: downloadId, value: { downloadUrl, filename, tabId, pageDomain, downloadDomain }
 const _pendingDownloads = new Map();
-const PENDING_DOWNLOAD_TTL = 5 * 60 * 1000; // 5分钟过期
 
 // 下载创建事件
 chrome.downloads.onCreated.addListener(async (downloadItem) => {
@@ -2539,11 +2720,20 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
 
     const tabState = await loadTabState(tabId);
 
-    // 白名单检查：白名单中的网站不拦截下载
+    // 白名单网站：不拦截下载
     if (tabState.isWhitelisted) {
       console.log('[ServiceWorker] 白名单网站，跳过下载检测:', tabState.domain);
       return;
     }
+
+    // 完全信任域名：不拦截下载
+    if (isFullyTrusted(tabState.domain)) {
+      console.log('[ServiceWorker] 完全信任域名，跳过下载检测:', tabState.domain);
+      return;
+    }
+
+    // 注：下载事件不受 Gate 约束。即使 Gate 判定页面无下载特征，
+    // 若用户实际触发了压缩包下载，仍在此处拦截检测——实际下载是比 HTML 分析更强的信号。
 
     // 官方网站检查：域名+ICP 均通过检测的官网不拦截下载
     if (tabState.isAnalyzed) {
@@ -2711,7 +2901,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const type = message.type;
 
   switch (type) {
-    case 'AUTH_INTERACTION_DETECTED': {
+    case MSG_TYPES.AUTH_INTERACTION_DETECTED: {
       const tabId = sender.tab ? sender.tab.id : null;
       if (!tabId) { sendResponse({ received: false }); return false; }
       _authenticationTabs.add(tabId);
@@ -2721,11 +2911,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
     }
 
-    case MSG_TYPES.PAGE_ANALYSIS_RESULT:
-    case 'PAGE_ANALYSIS_RESULT': {
+    case MSG_TYPES.PAGE_ANALYSIS_RESULT: {
       const tabId = sender.tab ? sender.tab.id : null;
       if (!tabId) { sendResponse({ received: false }); return false; }
-      const { url, domain, icpStrings, textSignals, pageMetrics, linkMetrics, hasIcpGovLink } = message.payload;
+      const { url, domain, icpStrings, textSignals, pageMetrics, linkMetrics, hasIcpGovLink, needsDetection, title, brandSignals } = message.payload;
 
       // 竞态条件防护：校验 content script 所在标签页的当前 URL 是否与采集数据的域名一致
       // 若用户已导航到其他页面，则丢弃此消息（旧页面的数据不应污染新页面的检测结果）
@@ -2767,6 +2956,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         ts.analysisDocumentId = messageIdentity.analysisDocumentId;
         if (pageMetrics) ts.pageMetrics = pageMetrics;
         if (linkMetrics) ts.linkMetrics = linkMetrics;
+        // 存储 Gate 判定结果（Content Script 计算）
+        ts._needsDetection = !!(needsDetection);
+        // 存储规则一联动信号：页面 title + 下载意图派生指标（仅计数，不含正文）
+        if (title) ts.title = String(title).substring(0, 200);
+        if (brandSignals) ts.brandSignals = brandSignals;
         // 存储 Resource Resolver 数据
         if (message.payload.resourceData) {
           ts._resourceData = message.payload.resourceData;
@@ -2779,8 +2973,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       break;
     }
 
-    case MSG_TYPES.GET_TAB_STATE:
-    case 'GET_TAB_STATE': {
+    case MSG_TYPES.GET_TAB_STATE: {
       chrome.tabs.query({ active: true, currentWindow: true }).then(async (tabs) => {
         if (tabs.length === 0) { sendResponse({ success: false, error: 'no tab' }); return; }
         const ts = await loadTabState(tabs[0].id);
@@ -2803,15 +2996,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
     }
 
-    case MSG_TYPES.GET_OFFICIAL_LINK:
-    case 'GET_OFFICIAL_LINK': {
+    case MSG_TYPES.GET_OFFICIAL_LINK: {
       const url = DomainDatabase.getCorrectUrl(message.payload?.name || '');
       sendResponse({ success: true, officialUrl: url });
       break;
     }
 
-    case MSG_TYPES.CLEAR_TAB_STATE:
-    case 'CLEAR_TAB_STATE': {
+    case MSG_TYPES.CLEAR_TAB_STATE: {
       chrome.tabs.query({ active: true, currentWindow: true }).then(async (tabs) => {
         if (tabs.length > 0) { await clearTabState(tabs[0].id); resetIcon(tabs[0].id); }
         sendResponse({ success: true });
@@ -2819,8 +3010,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
     }
 
-    case MSG_TYPES.ADD_TO_WHITELIST:
-    case 'ADD_TO_WHITELIST': {
+    case MSG_TYPES.ADD_TO_WHITELIST: {
       chrome.tabs.query({ active: true, currentWindow: true }).then(async (tabs) => {
         if (tabs.length === 0) { sendResponse({ success: false, error: 'no tab' }); return; }
         const url = message.payload?.url || '';
@@ -2832,8 +3022,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
     }
 
-    case MSG_TYPES.REMOVE_FROM_WHITELIST:
-    case 'REMOVE_FROM_WHITELIST': {
+    case MSG_TYPES.REMOVE_FROM_WHITELIST: {
       chrome.tabs.query({ active: true, currentWindow: true }).then(async (tabs) => {
         if (tabs.length === 0) { sendResponse({ success: false, error: 'no tab' }); return; }
         const url = message.payload?.url || '';
@@ -2846,8 +3035,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
     }
 
-    case MSG_TYPES.CHECK_WHITELIST:
-    case 'CHECK_WHITELIST': {
+    case MSG_TYPES.CHECK_WHITELIST: {
       const url = message.payload?.url || '';
       SiteAccessManager.getState(url).then(state => {
         sendResponse({ success: true, ...state });
@@ -2927,14 +3115,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     // 下载二次确认：处理用户在确认弹窗中的选择
-    case MSG_TYPES.DOWNLOAD_CONFIRMATION:
-    case 'DOWNLOAD_CONFIRMATION': {
+    case MSG_TYPES.DOWNLOAD_CONFIRMATION: {
       (async () => {
         const { action, downloadUrl, tabId, downloadId, pageDomain, downloadDomain, filename } = message.payload || {};
         console.log('[ServiceWorker] 下载确认:', action, downloadDomain);
 
         switch (action) {
-          case 'allow_once':
+          case DOWNLOAD_CONFIRM_ACTIONS.ALLOW_ONCE:
             // 仅此次放行：重新发起下载
             if (downloadUrl) {
               try {
@@ -2950,7 +3137,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             }
             break;
 
-          case 'trust_site':
+          case DOWNLOAD_CONFIRM_ACTIONS.TRUST_SITE:
             // 信任网站并放行：将页面域名加入白名单 + 重新发起下载
             if (pageDomain) {
               await whitelistSite(pageDomain, tabId || null);
@@ -2970,7 +3157,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             }
             break;
 
-          case 'block_blacklist':
+          case DOWNLOAD_CONFIRM_ACTIONS.BLOCK_BLACKLIST:
             // 拦截并拉黑：将下载域名加入黑名单
             if (downloadDomain) {
               await DownloadBlacklist.add(downloadDomain, {
@@ -2997,8 +3184,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     // 获取下载黑名单列表（供 Popup 管理界面使用）
-    case MSG_TYPES.GET_DOWNLOAD_BLACKLIST:
-    case 'GET_DOWNLOAD_BLACKLIST': {
+    case MSG_TYPES.GET_DOWNLOAD_BLACKLIST: {
       DownloadBlacklist.getAll().then(blacklist => {
         sendResponse({ success: true, data: blacklist });
       });
@@ -3006,8 +3192,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     // 移除下载黑名单条目（供 Popup 管理界面使用）
-    case MSG_TYPES.REMOVE_DOWNLOAD_BLACKLIST:
-    case 'REMOVE_DOWNLOAD_BLACKLIST': {
+    case MSG_TYPES.REMOVE_DOWNLOAD_BLACKLIST: {
       const targetDomain = message.payload?.domain || '';
       DownloadBlacklist.remove(targetDomain).then(() => {
         sendResponse({ success: true, removed: targetDomain });
@@ -3016,9 +3201,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     // 获取站点黑名单列表
-    case MSG_TYPES.GET_SITE_BLACKLIST:
-    case 'GET_SITE_BLACKLIST': {
-      SiteAccessManager.getSiteBlacklist().then(blacklist => {
+    case MSG_TYPES.GET_SITE_BLACKLIST: {
+      SiteBlacklist.getAll().then(blacklist => {
         sendResponse({ success: true, data: blacklist });
       });
       return true;
@@ -3036,15 +3220,40 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     // 添加站点黑名单条目
-    case MSG_TYPES.ADD_SITE_BLACKLIST:
-    case 'ADD_SITE_BLACKLIST': {
+    case MSG_TYPES.ADD_SITE_BLACKLIST: {
       (async () => {
         try {
           const domain = message.payload?.domain || '';
           const addedBy = message.payload?.addedBy || 'manual';
           if (!domain) { sendResponse({ success: false, error: '缺少 domain' }); return; }
-          await SiteAccessManager.addToBlacklist(domain, { addedBy });
-          await syncSiteAccessStateAcrossTabs();
+          // 白名单与黑名单互斥：加入黑名单时自动移出白名单（精确项或覆盖该域的通配符项）
+          const whitelist = await loadWhitelist();
+          const filtered = _filterWhitelistOutDomain(whitelist, domain);
+          if (filtered.length !== whitelist.length) {
+            await saveWhitelist(filtered);
+          }
+          await SiteBlacklist.add(domain, { addedBy });
+          
+          // 保存当前标签页的分析数据备份，以便移除黑名单后恢复
+          try {
+            const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+            if (tabs.length > 0) {
+              const currentTs = await loadTabState(tabs[0].id);
+              if (currentTs.isAnalyzed && currentTs.ruleResults && Object.keys(currentTs.ruleResults).length > 0
+                  && !currentTs.ruleResults.siteBlacklist) {
+                currentTs._preBlacklistState = {
+                  domain: currentTs.domain,
+                  score: currentTs.score,
+                  riskLevel: currentTs.riskLevel,
+                  ruleResults: { ...currentTs.ruleResults },
+                  correctUrl: currentTs.correctUrl,
+                  officialName: currentTs.officialName
+                };
+                await saveTabState(tabs[0].id, currentTs);
+              }
+            }
+          } catch (e) { /* 保存备份失败不影响主流程 */ }
+          
           sendResponse({ success: true, added: domain });
         } catch (e) { sendResponse({ success: false, error: e.message }); }
       })();
@@ -3052,8 +3261,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     // 移除站点黑名单条目
-    case MSG_TYPES.REMOVE_SITE_BLACKLIST:
-    case 'REMOVE_SITE_BLACKLIST': {
+    case MSG_TYPES.REMOVE_SITE_BLACKLIST: {
       const targetDomain = message.payload?.domain || '';
       SiteAccessManager.removeFromBlacklist(targetDomain).then(async ({ removed: wasRemoved }) => {
         if (wasRemoved) await syncSiteAccessStateAcrossTabs();
@@ -3063,18 +3271,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     // 清除全部站点黑名单
-    case MSG_TYPES.CLEAR_SITE_BLACKLIST:
-    case 'CLEAR_SITE_BLACKLIST': {
-      SiteAccessManager.clearSiteBlacklist().then(async () => {
-        await syncSiteAccessStateAcrossTabs();
+    case MSG_TYPES.CLEAR_SITE_BLACKLIST: {
+      SiteBlacklist.clearAll().then(() => {
         sendResponse({ success: true });
       });
       return true;
     }
 
     // 用户上报：误报 / 确认钓鱼
-    case MSG_TYPES.SUBMIT_REPORT:
-    case 'SUBMIT_REPORT': {
+    case MSG_TYPES.SUBMIT_REPORT: {
       (async () => {
         try {
           let { reportType, domain, note, url } = message.payload || {};
@@ -3130,9 +3335,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             score: reportContext.score || 0
           });
 
-          // 上限 200 条
-          if (reports.length > 200) {
-            reports.splice(0, reports.length - 200);
+          // 上限 REPORTS_MAX_ENTRIES 条（constants.js）
+          if (reports.length > REPORTS_MAX_ENTRIES) {
+            reports.splice(0, reports.length - REPORTS_MAX_ENTRIES);
           }
 
           await chrome.storage.local.set({ [STORAGE_KEYS.USER_REPORTS]: reports });
@@ -3144,13 +3349,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             _postReportToWorker(reportType, domain, note, reportContext);
           }
 
-          // 自动操作
-          if (reportType === 'false_positive') {
-            await whitelistSite(url || domain, sourceTabId);
+          // 自动操作（reportType 值来自 constants.js REPORT_TYPES 枚举）
+          if (reportType === REPORT_TYPES.FALSE_POSITIVE) {
+            // 用户认为该网站安全：加入白名单（addToWhitelist 内部已处理黑名单互斥），清除缓存
+            await addToWhitelist('https://' + domain);
             await CacheManager.remove(domain);
             console.log('[ServiceWorker] 误报已处理：加入白名单:', domain);
             sendResponse({ success: true, autoAction: 'whitelisted' });
-          } else if (reportType === 'confirmed_phish') {
+          } else if (reportType === REPORT_TYPES.CONFIRMED_PHISH) {
             // 确认钓鱼：移出白名单（互斥），同时将页面上的跨域下载域名加入下载黑名单
             await SiteAccessManager.removeFromWhitelist(domain);
             await syncWhitelistStateAcrossTabs();
@@ -3179,26 +3385,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
     }
 
-    case 'SETTINGS_UPDATED':
     case MSG_TYPES.SETTINGS_UPDATED: {
       _settingsCache = null;
       console.log('[ServiceWorker] 设置已更新，缓存已失效');
       sendResponse({ received: true });
       break;
     }
-    case 'BULK_UPDATE_WHITELIST':
     case MSG_TYPES.BULK_UPDATE_WHITELIST: {
       const domains = (message.payload && message.payload.domains) ? message.payload.domains : [];
-      SiteAccessManager.replaceWhitelist(domains).then(async (whitelist) => {
-        await syncWhitelistStateAcrossTabs();
-        console.log('[ServiceWorker] 白名单已批量更新:', whitelist.length, '个域名');
-        sendResponse({ success: true, count: whitelist.length, data: whitelist });
+      saveWhitelist(domains).then(async () => {
+        await removeBlockersFromWhitelistedTabs();
+        console.log('[ServiceWorker] 白名单已批量更新:', domains.length, '个域名');
+        sendResponse({ success: true, count: domains.length });
       }).catch(e => {
         sendResponse({ success: false, error: e.message });
       });
       return true;
     }
-    case 'CHECK_UPDATE':
     case MSG_TYPES.CHECK_UPDATE: {
       (async () => {
         await checkForUpdate();
@@ -3265,11 +3468,25 @@ chrome.notifications.onClosed.addListener(notificationId => {
 chrome.tabs.onRemoved.addListener(async (tabId) => {
   await clearTabState(tabId);
   _authenticationTabs.delete(tabId);
-  _preflightNavigationTokens.delete(tabId);
-  _pendingSoftPreflightWarnings.delete(tabId);
-  _navigationGenerations.delete(tabId);
-  _navigationStates.delete(tabId);
-  _lastCommittedHttpUrls.delete(tabId);
+  cancelGateTimeout(tabId);
+  _whoisPromises.delete(tabId);
+});
+
+// 标签页替换清理（如 prerender 激活、会话恢复时 tabId 变化）
+// 将旧 tabId 的状态迁移到新 tabId（而非直接删除），避免激活页保持"未分析"；
+// 旧 tabId 的会话级内存状态仍需清理。
+chrome.tabs.onReplaced.addListener((addedTabId, removedTabId) => {
+  (async () => {
+    const oldState = await loadTabState(removedTabId);
+    if (oldState && oldState.url) {
+      await saveTabState(addedTabId, oldState);
+    }
+    await clearTabState(removedTabId);
+  })().catch(() => {});
+  _warningCooldown.delete(removedTabId);
+  _authenticationTabs.delete(removedTabId);
+  cancelGateTimeout(removedTabId);
+  _whoisPromises.delete(removedTabId);
 });
 
 /**
@@ -3293,34 +3510,73 @@ chrome.runtime.onInstalled.addListener(async (details) => {
   if (details.reason === 'update') {
     await CacheManager.clearAll();
     await DownloadBlacklist.cleanup();
+    // 一次性清理旧版遗留的 local tab_state（已迁移 chrome.storage.session）
+    await cleanupLegacyLocalTabStates();
   }
   // 设置定时更新检查（每 24 小时）
-  await chrome.alarms.create('updateCheck', { periodInMinutes: 1440 });
+  await chrome.alarms.create(ALARM_NAME_UPDATE_CHECK, { periodInMinutes: UPDATE_CHECK_PERIOD_MINUTES });
+  // 设置定时缓存清理（每 6 小时，配额治理）
+  await chrome.alarms.create(CACHE_CLEANUP_ALARM_NAME, { periodInMinutes: CACHE_CLEANUP_PERIOD_MINUTES });
   // 首次检查
   checkForUpdate();
 });
 
 // 定时 alarm 触发更新检查
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === 'updateCheck') {
+  if (alarm.name === ALARM_NAME_UPDATE_CHECK) {
     checkForUpdate();
+  } else if (alarm.name === CACHE_CLEANUP_ALARM_NAME) {
+    runCacheCleanup();
   }
 });
+
+/**
+ * 周期缓存清理：删除过期 domain_cache + LRU 裁剪（保留最近 CACHE_LRU_KEEP_COUNT 条）。
+ * 同时兼容旧版本升级：清理 local 中遗留的 tab_state_*（仅当当前介质为 session 时，
+ * 避免 Firefox 回退路径下误删活跃标签页状态）。
+ * 清理统计仅输出日志，不阻塞主流程。
+ */
+async function runCacheCleanup() {
+  try {
+    const stats = await CacheManager.cleanup({ keepRecentCount: CACHE_LRU_KEEP_COUNT });
+    let legacyCleaned = 0;
+    // 仅 session 可用时清理 local 残留（见 cleanupLegacyLocalTabStates 注释）
+    if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.session) {
+      try {
+        const all = await chrome.storage.local.get(null);
+        const legacyKeys = Object.keys(all).filter(k => k.startsWith(STORAGE_KEYS.TAB_STATE_PREFIX));
+        if (legacyKeys.length > 0) {
+          await chrome.storage.local.remove(legacyKeys);
+          legacyCleaned = legacyKeys.length;
+        }
+      } catch (e) { /* 遗留清理失败不影响主清理 */ }
+    }
+    console.log(`[ServiceWorker] 缓存清理完成: 删除 ${stats.removed} 条(过期/LRU), 保留 ${stats.kept}/${stats.total} 条, 遗留 tab_state ${legacyCleaned} 条`);
+  } catch (e) {
+    console.error('[ServiceWorker] 缓存清理失败:', e.message);
+  }
+}
 
 // 存储变更监听：白名单 / 黑名单 / 设置被其他页面修改时使内存缓存失效
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local') {
-    SiteAccessManager.invalidate(changes);
-    if (changes[STORAGE_KEYS.WHITELIST] || changes[STORAGE_KEYS.SITE_BLACKLIST]) {
-      syncSiteAccessStateAcrossTabs().catch(() => {});
+    if (changes[STORAGE_KEYS.WHITELIST]) {
+      _invalidateWhitelistCache();
     }
     if (changes[STORAGE_KEYS.DOWNLOAD_BLACKLIST]) {
       DownloadBlacklist.invalidateCache();
     }
     if (changes[STORAGE_KEYS.GLOBAL_SETTINGS]) {
       _settingsCache = null;
+      // 用户修改 cache_ttlHours 后即时生效（失效 CacheManager 的 TTL 缓存）
+      invalidateCacheTtl();
     }
   }
 });
 
 console.log(`[ServiceWorker] ✅ 银狐木马检测扩展 v${VERSION} 已就绪`);
+
+
+
+
+

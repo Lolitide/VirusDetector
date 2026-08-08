@@ -2,8 +2,14 @@ name: CI
 
 on:
   push:
+    paths-ignore:
+      - '**/*.md'
+      - '.github/ISSUE_TEMPLATE/**'
   pull_request:
     branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - '.github/ISSUE_TEMPLATE/**'
 
 permissions:
   contents: read
@@ -24,3 +30,19 @@ jobs:
         run: npm ci
       - name: Validate manifest and JavaScript
         run: npm run check
+
+  codeql:
+    name: CodeQL analysis
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+      - name: Analyze code
+        uses: github/codeql-action/analyze@v3

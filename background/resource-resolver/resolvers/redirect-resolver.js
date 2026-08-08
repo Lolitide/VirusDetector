@@ -8,29 +8,26 @@
  */
 
 import { BaseResolver } from './base-resolver.js';
-import { RESOURCE_TYPES, SOURCE_TYPES } from '../config.js';
+import { RESOURCE_TYPES, SOURCE_TYPES, MAX_REDIRECTS } from '../config.js';
 
 export class RedirectResolver extends BaseResolver {
   canHandle(node) {
-    // 处理 type 为 redirect_* 的节点
     return node.type && node.type.startsWith('redirect_');
   }
 
   async resolve(node, context) {
     const discovered = [];
 
-    // 检查深度
     if (node.depth >= context.config.maxDepth) {
       return discovered;
     }
 
-    const maxRedirects = 5;
+    const maxRedirects = MAX_REDIRECTS;   // 来自 constants.js
     let currentUrl = node.url;
     const visitedInChain = new Set();
 
     for (let i = 0; i < maxRedirects; i++) {
       if (visitedInChain.has(currentUrl)) {
-        // 重定向循环
         break;
       }
       visitedInChain.add(currentUrl);
@@ -47,7 +44,6 @@ export class RedirectResolver extends BaseResolver {
           if (location) {
             const nextUrl = this.resolveUrl(location, currentUrl);
             if (nextUrl && nextUrl !== currentUrl) {
-              // 记录重定向
               context.graph.addRedirect(currentUrl, nextUrl, status);
 
               const isCrossDomain = this.isCrossDomain(nextUrl, context.pageUrl);
@@ -55,7 +51,6 @@ export class RedirectResolver extends BaseResolver {
 
               currentUrl = nextUrl;
 
-              // 如果是最后一个重定向或到达了实际资源
               if (i === maxRedirects - 1 || isArchive || isExecutable || isTxt || isJson) {
                 let nodeType;
                 if (isArchive) nodeType = RESOURCE_TYPES.ARCHIVE;
@@ -106,7 +101,6 @@ export class RedirectResolver extends BaseResolver {
         break;
 
       } catch (e) {
-        // 网络错误 → 停止跟随
         console.debug('[RedirectResolver] HEAD 请求失败:', currentUrl, e.message);
         break;
       }

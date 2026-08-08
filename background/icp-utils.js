@@ -2,12 +2,26 @@
  * ICP备案号检测工具 — CJK内容识别 + 外国站点豁免 + 正则匹配
  *
  * @module icp-utils
+ *
+ * 前置条件：
+ *   - 纯静态工具：依赖 utils/constants.js 的 CJK_RANGES / 阈值常量与
+ *     utils/exemptions/index.js 豁免名单（与 content-script 共用同一份口径）
+ *   - registerNonChineseBrandDomains 需在 domain-database 加载完成后调用
+ *
+ * 输入输出：
+ *   - 输入：页面文本、DOM 中的 ICP 字符串、待判定域名
+ *   - 输出：备案号候选数组（含省份解析）、CJK 内容判定、伪造备案号过滤、豁免判定
+ *
+ * 算法与参考：
+ *   - 备案号匹配：省份简称 + ICP备/证 格式正则，配合伪造号码黑名单（ICP_BLACKLIST）过滤
+ *   - CJK 判定：按 Unicode 码点区间（CJK_RANGES）统计，结合数量/占比阈值
+ *   - 豁免名单维护于 utils/exemptions/index.js，非中国品牌官方域名动态注册
  */
 
 // ==================== 外国网站ICP豁免白名单 ====================
-// 这些是全球知名非中国站点，确定不需要ICP备案。
-// 名单已统一迁移至 utils/exemptions/index.js（导出 ICP_EXEMPT_DOMAINS），便于集中维护、避免重复登记。
+// 全球知名非中国站点，确定不需要ICP备案；名单维护于 utils/exemptions/icp-exempt.js
 import { ICP_EXEMPT_DOMAINS } from '../utils/exemptions/index.js';
+import { CJK_RANGES, CJK_MIN_COUNT, CJK_MIN_RATIO, CJK_ABSOLUTE_COUNT } from '../utils/constants.js';
 
 /**
  * 从 domain-database 中动态提取非中国品牌的官方域名并加入豁免集合
@@ -21,18 +35,7 @@ export function registerNonChineseBrandDomains(domains) {
 }
 
 // ==================== CJK 字符检测 ====================
-
-/**
- * CJK 统一表意文字 Unicode 范围
- * - U+4E00–U+9FFF   CJK 统一表意文字（常用汉字）
- * - U+3400–U+4DBF   CJK 扩展 A
- * - U+F900–U+FAFF   CJK 兼容表意文字
- */
-const CJK_RANGES = [
-  [0x4E00, 0x9FFF],
-  [0x3400, 0x4DBF],
-  [0xF900, 0xFAFF]
-];
+// CJK_RANGES 来自 utils/constants.js（与 content-script 同一份，避免口径漂移）
 
 function isCJKChar(codePoint) {
   return CJK_RANGES.some(([lo, hi]) => codePoint >= lo && codePoint <= hi);
@@ -323,9 +326,9 @@ export class IcpUtils {
   /**
    * 检测页面文本中是否包含显著的中文（CJK）内容。
    *
-   * 双重阈值：
-   *   - CJK 字符绝对数量 >= 30 且占比 >= 8%
-   *   - 或 CJK 字符 >= 500（长中文页面，即使占比低也算）
+   * 双重阈值（来自 constants.js，与 content-script 同口径，放宽以兼容中英混排的中文钓鱼页）：
+   *   - ≥CJK_MIN_COUNT(20) 个汉字且占比 ≥CJK_MIN_RATIO(0.02)
+   *   - 或 ≥CJK_ABSOLUTE_COUNT(120) 个汉字（密度很高，无论如何视为中文）
    *
    * 使用 pageText（前 15000 字符）即可有效判定，
    * 因为中文网站的前几千字符几乎必然包含大量汉字。
@@ -344,20 +347,13 @@ export class IcpUtils {
     for (let i = 0; i < totalChars; i++) {
       if (isCJKChar(text.codePointAt(i))) {
         cjkCount++;
-        // 跳过代理对（emoji等），但CJK基本在多语言平面内，不会触发代理对
-        // 安全起见处理一下
+        // 跳过代理对（emoji 等补充平面字符）
         if (text.codePointAt(i) > 0xFFFF) i++;
       }
     }
 
     const cjkRatio = cjkCount / totalChars;
-    // 放宽判定：中文钓鱼页常中英混排（大量英文按钮/URL/版本号），
-    // 原 0.08 占比阈值会把「有中文但英文更多」的页面误判为非中文，
-    // 进而被规则三当成外国站跳过备案检查。改为：
-    //   · ≥20 个汉字且占比≥0.02  → 视为中文页面
-    //   · 或 ≥120 个汉字（密度很高，无论如何视为中文）
-    // 纯英文外国站（如 revouninstaller.com 仅 7 汉字）仍正确判为非中文。
-    const hasCJK = (cjkCount >= 20 && cjkRatio >= 0.02) || cjkCount >= 120;
+    const hasCJK = (cjkCount >= CJK_MIN_COUNT && cjkRatio >= CJK_MIN_RATIO) || cjkCount >= CJK_ABSOLUTE_COUNT;
 
     return { hasCJK, cjkCount, cjkRatio };
   }
