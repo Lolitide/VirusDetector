@@ -19,6 +19,7 @@
  */
 
 import { SETTINGS_DEFAULTS, SECTIONS, SENSITIVITY_PRESETS, SCHEMA_VERSION, validateSetting, migrateSettings } from '../utils/settings-schema.js';
+import { normalizeWhitelistEntry } from '../utils/whitelist-matcher.js';
 import {
   STORAGE_KEYS, MSG_TYPES, VERSION, UPDATE_CHANNEL,
   UI_KEYS, ADVANCED_ONLY_SECTIONS, PRESET_LEVELS,
@@ -726,9 +727,28 @@ class SettingsApp {
       const keysToRemove = Object.keys(all).filter(k =>
         k.startsWith(STORAGE_KEYS.DOMAIN_CACHE) || k.startsWith(STORAGE_KEYS.ICP_CACHE_PREFIX)
       );
+      let cleared = keysToRemove.length;
       if (keysToRemove.length > 0) {
         await chrome.storage.local.remove(keysToRemove);
-        this._showToast(`已清除 ${keysToRemove.length} 条缓存记录`, 'success');
+      }
+      // 标签页状态缓存位于 session 存储，一并清除（不占用 local 配额）；
+      // Firefox(<142) 无 session 时 tabState 存于 local，此时从 local 清除
+      if (chrome.storage && chrome.storage.session) {
+        const sessionAll = await chrome.storage.session.get(null);
+        const sessionKeys = Object.keys(sessionAll).filter(k => k.startsWith(STORAGE_KEYS.TAB_STATE_PREFIX));
+        if (sessionKeys.length > 0) {
+          await chrome.storage.session.remove(sessionKeys);
+          cleared += sessionKeys.length;
+        }
+      } else {
+        const localTabStateKeys = Object.keys(all).filter(k => k.startsWith(STORAGE_KEYS.TAB_STATE_PREFIX));
+        if (localTabStateKeys.length > 0) {
+          await chrome.storage.local.remove(localTabStateKeys);
+          cleared += localTabStateKeys.length;
+        }
+      }
+      if (cleared > 0) {
+        this._showToast(`已清除 ${cleared} 条缓存记录`, 'success');
       } else {
         this._showToast('没有需要清除的缓存', 'info');
       }
@@ -748,6 +768,10 @@ class SettingsApp {
         await chrome.storage.local.remove(keysToRemove);
       }
       await chrome.storage.local.remove(STORAGE_KEYS.GLOBAL_SETTINGS);
+      // 清空 session 存储（标签页状态等临时数据）
+      if (chrome.storage && chrome.storage.session) {
+        await chrome.storage.session.clear().catch(() => {});
+      }
       this.settings = { ...SETTINGS_DEFAULTS };
       this._presetOverrides = {};
       this._renderSection(this._activeSection);
@@ -839,7 +863,7 @@ class SettingsApp {
             提示：也可以通过弹窗中的星形按钮快速将当前网站加入白名单
           </div>
           <div class="list-editor-wrapper">
-            <textarea id="whitelist-editor" class="list-editor" placeholder="每行输入一个域名，例如：&#10;example.com&#10;trusted-site.org" spellcheck="false"></textarea>
+            <textarea id="whitelist-editor" class="list-editor" placeholder="每行一个条目，支持域名通配符，例如：&#10;example.com            （仅精确域名）&#10;*.example.com        （example.com 及其所有子域名）&#10;*                   （匹配所有域名，慎用）" spellcheck="false"></textarea>
             <div class="list-editor-count" id="whitelist-count"></div>
           </div>
           <div class="list-actions">
@@ -887,12 +911,13 @@ class SettingsApp {
     if (el) el.innerHTML = `共 <strong>${count}</strong> 个域名`;
   }
 
-  /** 保存白名单：解析 textarea → 去重去空 → 批量写入 storage */
+  /** 保存白名单：解析 textarea → 规范化去重去空 → 批量写入 storage */
   async _saveWhitelist() {
     const editor = document.getElementById('whitelist-editor');
     if (!editor) return;
-    const lines = editor.value.split(/[\n\r]+/).map(s => s.trim()).filter(Boolean);
-    const domains = [...new Set(lines)];    try {
+    const lines = editor.value.split(/[\n\r]+/).map(s => normalizeWhitelistEntry(s)).filter(Boolean);
+    const domains = [...new Set(lines)];
+    try {
       await chrome.storage.local.set({ [STORAGE_KEYS.WHITELIST]: domains });
       // 通知 Service Worker 刷新内存缓存
       try {
@@ -908,18 +933,14 @@ class SettingsApp {
     }
   }
 
-  /** 从 .txt 文件导入白名单（合并去重） */
+  /** 从 .txt 文件导入白名单（合并去重，自动规范化域名/通配符） */
   async _importWhitelist(file) {
     try {
       const text = await file.text();
-      const newDomains = text.split(/[\n\r]+/).map(s => s.trim()).filter(Boolean).map(s => {
-        // 尝试提取纯域名（去掉协议和路径）
-        try { return new URL(s.startsWith('http') ? s : 'https://' + s).hostname; }
-        catch { return s.replace(/^https?:\/\//, '').split('/')[0]; }
-      });
+      const newDomains = text.split(/[\n\r]+/).map(s => normalizeWhitelistEntry(s)).filter(Boolean);
       const editor = document.getElementById('whitelist-editor');
       if (!editor) return;
-      const existing = editor.value.split(/[\n\r]+/).map(s => s.trim()).filter(Boolean);
+      const existing = editor.value.split(/[\n\r]+/).map(s => normalizeWhitelistEntry(s)).filter(Boolean);
       const merged = [...new Set([...existing, ...newDomains])];
       editor.value = merged.join('\n');
       this._updateWhitelistCount(merged.length);
@@ -1495,7 +1516,15 @@ SettingsApp.prototype._loadStorageStats = async function () {
     const icpApiCacheKeys = Object.keys(all).filter(k =>
       k.startsWith(STORAGE_KEYS.ICP_CACHE_PREFIX)
     );
-    const tabStateKeys = Object.keys(all).filter(k => k.startsWith(STORAGE_KEYS.TAB_STATE_PREFIX));
+    // 标签页状态已迁移至 chrome.storage.session（不占用 local 配额）；
+    // Firefox(<142) 无 session 时回退 local，此时从 local 统计
+    let tabStateKeys = [];
+    if (chrome.storage && chrome.storage.session) {
+      const sessionAll = await chrome.storage.session.get(null);
+      tabStateKeys = Object.keys(sessionAll).filter(k => k.startsWith(STORAGE_KEYS.TAB_STATE_PREFIX));
+    } else {
+      tabStateKeys = Object.keys(all).filter(k => k.startsWith(STORAGE_KEYS.TAB_STATE_PREFIX));
+    }
     const whitelist = all[STORAGE_KEYS.WHITELIST] || [];
     const blacklist = all[STORAGE_KEYS.DOWNLOAD_BLACKLIST] || [];
     const siteBlacklist = all[STORAGE_KEYS.SITE_BLACKLIST] || [];
@@ -1513,7 +1542,7 @@ SettingsApp.prototype._loadStorageStats = async function () {
       </div>
       <div class="about-row"><span class="about-label">缓存记录</span><span class="about-value">${cacheKeys.length} 条</span></div>
       <div class="about-row"><span class="about-label">ICP API 缓存</span><span class="about-value">${icpApiCacheKeys.length} 条</span></div>
-      <div class="about-row"><span class="about-label">标签页状态</span><span class="about-value">${tabStateKeys.length} 个</span></div>
+      <div class="about-row"><span class="about-label">标签页状态</span><span class="about-value">${tabStateKeys.length} 个${chrome.storage && chrome.storage.session ? '（session）' : ''}</span></div>
       <div class="about-row"><span class="about-label">白名单域名</span><span class="about-value">${Array.isArray(whitelist) ? whitelist.length : 0} 个</span></div>
       <div class="about-row"><span class="about-label">站点黑名单</span><span class="about-value">${typeof siteBlacklist === 'object' ? Object.keys(siteBlacklist).length : 0} 条</span></div>
       <div class="about-row"><span class="about-label">下载黑名单</span><span class="about-value">${typeof blacklist === 'object' ? Object.keys(blacklist).length : 0} 条</span></div>

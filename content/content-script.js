@@ -550,6 +550,37 @@
     };
   }
 
+  /**
+   * 统计页面链接中指向「可信外链平台」（开源/标准/文档，见 constants.js TRUSTED_EXTERNAL_DOMAINS）
+   * 的去重 hostname 数量。纯计数派生指标，不含具体链接，符合隐私约束。
+   * 匹配规则：hostname 等于白名单项或以其为后缀（xxx.github.io 命中 github.io）。
+   * @returns {number} 可信外链 hostname 去重数
+   */
+  function collectTrustedExternalLinks() {
+    const trusted = C.TRUSTED_EXTERNAL_DOMAINS || [];
+    if (trusted.length === 0) return 0;
+    const currentHost = (window.location.hostname || '').toLowerCase();
+    const matched = new Set();
+    const anchors = document.querySelectorAll('a[href]');
+    for (let i = 0; i < anchors.length; i++) {
+      const href = anchors[i].getAttribute('href') || '';
+      if (!href || /^(javascript:|#|mailto:|tel:|data:)/i.test(href)) continue;
+      try {
+        const u = new URL(href, window.location.href);
+        const host = u.hostname.toLowerCase();
+        if (!host || host === currentHost) continue;
+        for (let t = 0; t < trusted.length; t++) {
+          const d = trusted[t];
+          if (host === d || host.endsWith('.' + d)) {
+            matched.add(d);
+            break;
+          }
+        }
+      } catch (e) { /* 忽略无法解析的链接 */ }
+    }
+    return matched.size;
+  }
+
   // ==================== Resource Resolver 数据采集 ====================
   /**
    * 采集页面资源数据供 Resource Resolver 使用。
@@ -1085,7 +1116,6 @@
     var hasIcpGovLink = checkIcpGovLink();
     var textSignals = safeCollect(function() { return collectTextSignals(bodyText); }, null);
     var resourceData = safeCollect(function() { return collectResourceData(); }, null);
-
     // Gate: 下载意图门控 — 任一条件触发即视为有下载意图
     // 条件1：任意 <a> 链接文本含下载关键词（不论 href 指向什么、甚至 javascript: 函数调用）
     // 条件2：页面正文中下载关键词密度 ≥ 阈值（默认 2.0 次/千字符，可在设置中调整）
@@ -1126,7 +1156,13 @@
       url: window.location.href, domain: window.location.hostname, title: document.title,
       icpStrings: icpStrings, pageMetrics: pageMetrics, linkMetrics: linkMetrics,
       hasIcpGovLink: hasIcpGovLink, textSignals: textSignals, resourceData: resourceData,
-      needsDetection: needsDetection
+      needsDetection: needsDetection,
+      // 规则一联动派生指标（仅计数/密度，不含页面正文，符合隐私约束）
+      brandSignals: {
+        downloadIntentWords: kwHitCount,
+        downloadIntentDensity: downloadDensity,
+        trustedExternalLinks: safeCollect(collectTrustedExternalLinks, 0)
+      }
     };
 
     if (_firstScanData) {
@@ -1234,6 +1270,12 @@
             textSignals: safeCollect(function() { return collectTextSignals(bodyText); }, null),
             resourceData: safeCollect(function() { return collectResourceData(); }, null),
             needsDetection: needsDetection2,
+            // 规则一联动派生指标（仅计数/密度，不含页面正文）
+            brandSignals: {
+              downloadIntentWords: kwHits,
+              downloadIntentDensity: density2,
+              trustedExternalLinks: safeCollect(collectTrustedExternalLinks, 0)
+            },
             title: document.title,
             url: window.location.href
           });

@@ -29,7 +29,7 @@
 
 import { ScoringEngine, setActiveSettings } from './scoring-engine.js';
 import { DomainDatabase } from './domain-database.js';
-import { CacheManager } from './cache-manager.js';
+import { CacheManager, invalidateCacheTtl } from './cache-manager.js';
 import { DownloadBlacklist } from './download-blacklist.js';
 import { SiteBlacklist } from './site-blacklist.js';
 import { ResourceResolver } from './resource-resolver/index.js';
@@ -37,6 +37,9 @@ import { registerNonChineseBrandDomains, IcpUtils } from './icp-utils.js';
 import { IcpApiClient } from './icp-api.js';
 import { WhoisClient } from './whois-client.js';
 import { UrlUtils } from '../utils/url-utils.js';
+import {
+  normalizeWhitelistEntry, isWildcardPattern, matchWhitelistEntry, isWhitelistedDomain
+} from '../utils/whitelist-matcher.js';
 import { isFullyTrusted } from '../utils/exemptions/fully-trusted.js';
 import {
   SCORE_THRESHOLD, DOWNLOAD_CONFIRM_THRESHOLD, RISK_LEVEL, MSG_TYPES,
@@ -46,6 +49,7 @@ import {
   ICP_API_CONFIG, SCORE_SITE_BLACKLIST, WARNING_COOLDOWN_MS,
   ARCHIVE_EXTENSIONS, EXECUTABLE_EXTENSIONS, DOWNLOAD_INTENT_KEYWORDS,
   buildAuthPatterns, ALARM_NAME_UPDATE_CHECK, UPDATE_CHECK_PERIOD_MINUTES,
+  CACHE_CLEANUP_ALARM_NAME, CACHE_CLEANUP_PERIOD_MINUTES, CACHE_LRU_KEEP_COUNT,
   GATE_TIMEOUT_MS, BLOCKER_OBSERVER_LIFETIME_MS, REPORTS_MAX_ENTRIES,
   DOWNLOAD_CONFIRM_ACTIONS, REPORT_TYPES
 } from '../utils/constants.js';
@@ -360,6 +364,18 @@ function sanitizeRuleResultsForCache(ruleResults) {
 // ==================== 标签页状态管理 ====================
 
 /**
+ * 标签页状态存储介质选择。
+ * tabState 为临时数据（浏览器会话内有效，SW 重启后重新分析即可），
+ * 优先使用 chrome.storage.session（内存 10MB 独立配额，不占用 storage.local 的
+ * 10MB 持久配额，浏览器会话结束自动清空）；Firefox 旧版等无 session 时回退 local。
+ */
+function _tabStateStorage() {
+  return (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.session)
+    ? chrome.storage.session
+    : chrome.storage.local;
+}
+
+/**
  * 创建初始标签页状态对象
  * @returns {Object} 包含所有规则结果、下载状态、页面数据、白名单标志的初始状态
  */
@@ -386,7 +402,7 @@ function createTabState() {
 async function loadTabState(tabId) {
   try {
     const key = STORAGE_KEYS.TAB_STATE_PREFIX + tabId;
-    const r = await chrome.storage.local.get(key);
+    const r = await _tabStateStorage().get(key);
     return r[key] || createTabState();
   } catch (e) { return createTabState(); }
 }
@@ -395,14 +411,36 @@ async function saveTabState(tabId, s) {
   try {
     const sanitizedState = { ...s };
     delete sanitizedState.pageText; // 不持久化页面正文，仅保留派生指标 textSignals
-    await chrome.storage.local.set({ [STORAGE_KEYS.TAB_STATE_PREFIX + tabId]: sanitizedState });
+    await _tabStateStorage().set({ [STORAGE_KEYS.TAB_STATE_PREFIX + tabId]: sanitizedState });
   } catch (e) { /* ignore */ }
 }
 
 async function clearTabState(tabId) {
   try {
-    await chrome.storage.local.remove(STORAGE_KEYS.TAB_STATE_PREFIX + tabId);
+    await _tabStateStorage().remove(STORAGE_KEYS.TAB_STATE_PREFIX + tabId);
   } catch (e) { /* ignore */ }
+}
+
+/**
+ * 一次性清理：旧版本遗留的 chrome.storage.local 中的 tab_state_* 键。
+ * tabState 已迁移至 chrome.storage.session，local 中的残留仅占配额无任何价值；
+ * 在 onInstalled(update) 时执行一次，避免每启动扫描 local 的开销。
+ * 注意：仅当当前介质确为 session 时才清理 local 残留——
+ * Firefox(<142) 无 chrome.storage.session，回退路径下 tabState 存于 local，
+ * 此时清理会删除活跃标签页的检测状态。
+ */
+async function cleanupLegacyLocalTabStates() {
+  if (!(typeof chrome !== 'undefined' && chrome.storage && chrome.storage.session)) return;
+  try {
+    const all = await chrome.storage.local.get(null);
+    const keys = Object.keys(all).filter(k => k.startsWith(STORAGE_KEYS.TAB_STATE_PREFIX));
+    if (keys.length > 0) {
+      await chrome.storage.local.remove(keys);
+      console.log(`[ServiceWorker] 已清理旧版遗留的 ${keys.length} 条 local tab_state`);
+    }
+  } catch (e) {
+    console.warn('[ServiceWorker] 清理旧版遗留 tab_state 失败:', e.message);
+  }
 }
 
 // ==================== 工具栏图标与徽章更新 ====================
@@ -481,89 +519,157 @@ function cancelGateTimeout(tabId) {
 
 // ==================== 白名单管理 ====================
 // 白名单存储在 chrome.storage.local 中，键名为 STORAGE_KEYS.WHITELIST
-// 数据结构：string[] — 域名列表（不含协议和路径，如 "example.com"）
+// 数据结构：string[] — 域名/通配符列表（不含协议和路径，如 "example.com"）
+//   支持三种条目：
+//     - 精确域名：example.com            → 仅匹配该主机名
+//     - 通配符域名：*.example.com        → 匹配 example.com 及其所有子域名（任意层级）
+//     - 全匹配：*                         → 匹配所有域名（完全跳过检测，慎用）
 // 白名单中的域名完全跳过 5 规则检测，工具栏图标显示蓝色 "✓" 徽章
 //
-// 性能优化：内存缓存 + storage.onChanged 失效机制，避免每次操作都读存储。
+// 性能优化：内存缓存（精确域名 Set + 通配符数组）+ storage.onChanged 失效机制，
+// 精确匹配保持 O(1)，通配符按条目数线性匹配（白名单规模通常很小，可接受）。
 
-/** @type {Set<string>|null} 内存缓存的白名单域名集合 */
-let _whitelistCache = null;
+/** @type {Set<string>|null} 精确白名单域名集合（不含通配符，已规范化小写） */
+let _whitelistExact = null;
+/** @type {string[]|null} 通配符白名单条目（含 *，已规范化小写） */
+let _whitelistPatterns = null;
+/** @type {string[]|null} 原始白名单数组（用于增删等需要完整列表的操作） */
+let _whitelistRaw = null;
+
+/**
+ * 根据原始白名单数组重建内存索引（精确集合 + 通配符数组）
+ * @param {string[]} list
+ */
+function _buildWhitelistIndexes(list) {
+  const exact = new Set();
+  const patterns = [];
+  for (const entry of (list || [])) {
+    const norm = normalizeWhitelistEntry(entry);
+    if (!norm) continue;
+    if (isWildcardPattern(norm)) patterns.push(norm);
+    else exact.add(norm);
+  }
+  _whitelistExact = exact;
+  _whitelistPatterns = patterns;
+  _whitelistRaw = list || [];
+}
 
 /**
  * 从存储加载白名单（优先返回内存缓存）
  * @returns {Promise<string[]>}
  */
 async function loadWhitelist() {
-  if (_whitelistCache) {
-    return [..._whitelistCache];
+  if (_whitelistExact !== null) {
+    return [..._whitelistRaw];
   }
   try {
     const r = await chrome.storage.local.get(STORAGE_KEYS.WHITELIST);
     const list = r[STORAGE_KEYS.WHITELIST] || [];
-    _whitelistCache = new Set(list);
+    _buildWhitelistIndexes(list);
     return list;
   } catch (e) { return []; }
 }
 
 /** 使白名单内存缓存失效，下次 loadWhitelist 重新从存储读取 */
 function _invalidateWhitelistCache() {
-  _whitelistCache = null;
+  _whitelistExact = null;
+  _whitelistPatterns = null;
+  _whitelistRaw = null;
 }
 
 async function saveWhitelist(whitelist) {
   try {
-    await chrome.storage.local.set({ [STORAGE_KEYS.WHITELIST]: whitelist });
-    // 同步更新内存缓存
-    _whitelistCache = new Set(whitelist);
+    // 规范化 + 去重，保证存储中的条目形式统一（小写、无协议/路径/尾点）
+    const normalized = [...new Set(
+      (whitelist || []).map(d => normalizeWhitelistEntry(d)).filter(Boolean)
+    )];
+    await chrome.storage.local.set({ [STORAGE_KEYS.WHITELIST]: normalized });
+    // 同步更新内存缓存索引
+    _buildWhitelistIndexes(normalized);
   } catch (e) { /* ignore */ }
 }
 
 /**
  * 检查URL对应域名是否在白名单中
- * 优化：优先 O(1) 内存缓存查找，避免每次异步读存储
+ * 优化：优先 O(1) 精确集合查找，未命中再线性匹配通配符条目，避免每次异步读存储
  */
 async function isWhitelisted(url) {
   const domain = UrlUtils.extractHostname(url);
-  if (_whitelistCache) {
-    return _whitelistCache.has(domain);
+  if (_whitelistExact !== null) {
+    if (_whitelistExact.has(domain.toLowerCase())) return true;
+    for (const p of _whitelistPatterns) {
+      if (matchWhitelistEntry(domain, p)) return true;
+    }
+    return false;
   }
   const whitelist = await loadWhitelist();
-  return whitelist.includes(domain);
+  return isWhitelistedDomain(domain, whitelist);
 }
 
 /**
- * 将域名加入白名单
+ * 将域名加入白名单（支持传入通配符条目，例如 "*.example.com"）
  */
 async function addToWhitelist(url) {
-  const domain = UrlUtils.extractHostname(url);
-  // 白名单与黑名单互斥：加入白名单前先移出黑名单中可能存在的同一域名
-  await SiteBlacklist.remove(domain);
+  const entry = normalizeWhitelistEntry(UrlUtils.extractHostname(url));
+  if (!entry) return;
+
+  // 白名单与黑名单互斥：仅对精确域名执行黑名单移除；通配符条目不针对具体黑名单域名操作
+  if (!isWildcardPattern(entry)) {
+    await SiteBlacklist.remove(entry);
+  }
 
   // 先用内存缓存快速判断，避免无谓的存储读取
-  if (_whitelistCache && _whitelistCache.has(domain)) {
-    console.log('[ServiceWorker] 域名已在白名单:', domain);
+  if (_whitelistRaw && _whitelistRaw.some(d => normalizeWhitelistEntry(d) === entry)) {
+    console.log('[ServiceWorker] 域名已在白名单:', entry);
     return;
   }
   const whitelist = await loadWhitelist();
-  if (!whitelist.includes(domain)) {
-    whitelist.push(domain);
+  if (!whitelist.some(d => normalizeWhitelistEntry(d) === entry)) {
+    whitelist.push(entry);
     await saveWhitelist(whitelist);
-    console.log('[ServiceWorker] 已加入白名单:', domain);
+    console.log('[ServiceWorker] 已加入白名单:', entry);
   }
 }
 
 /**
  * 将域名从白名单移除
+ * 优先精确移除；若没有精确条目，则移除覆盖该域名的一个通配符条目
+ * （例如白名单含 *.example.com 时，对 sub.example.com 执行移除会删掉 *.example.com）
  */
 async function removeFromWhitelist(url) {
-  const domain = UrlUtils.extractHostname(url);
+  const entry = normalizeWhitelistEntry(UrlUtils.extractHostname(url));
+  if (!entry) return;
   const whitelist = await loadWhitelist();
-  const idx = whitelist.indexOf(domain);
+  let idx = whitelist.findIndex(d => normalizeWhitelistEntry(d) === entry);
+  if (idx === -1) {
+    idx = whitelist.findIndex(d => {
+      const norm = normalizeWhitelistEntry(d);
+      return isWildcardPattern(norm) && matchWhitelistEntry(entry, norm);
+    });
+  }
   if (idx !== -1) {
+    const removed = whitelist[idx];
     whitelist.splice(idx, 1);
     await saveWhitelist(whitelist);
-    console.log('[ServiceWorker] 已移出白名单:', domain);
+    console.log('[ServiceWorker] 已移出白名单:', removed);
   }
+}
+
+/**
+ * 从白名单数组中过滤掉指定域名：精确匹配项或覆盖该域的通配符项都会被移除
+ * @param {string[]} list
+ * @param {string} domain
+ * @returns {string[]} 过滤后的新数组
+ */
+function _filterWhitelistOutDomain(list, domain) {
+  const norm = normalizeWhitelistEntry(domain);
+  if (!norm) return list;
+  return (list || []).filter(d => {
+    const e = normalizeWhitelistEntry(d);
+    if (e === norm) return false;
+    if (isWildcardPattern(e) && matchWhitelistEntry(norm, e)) return false;
+    return true;
+  });
 }
 
 /**
@@ -681,7 +787,10 @@ async function injectDownloadBlocker(tabId, archiveUrls = [], mode = 'full') {
       args: [archiveUrls, settings.detectNonArchiveFiles, mode, {
         archives: ARCHIVE_EXTENSIONS,
         executables: EXECUTABLE_EXTENSIONS,
-        downloadKeywords: DOWNLOAD_INTENT_KEYWORDS
+        downloadKeywords: DOWNLOAD_INTENT_KEYWORDS,
+        // 注：注入函数经 executeScript 序列化执行，闭包不保留，
+        // 所有模块级常量必须经 args 显式传入（历史回归点：BLOCKER_OBSERVER_LIFETIME_MS）
+        observerLifetimeMs: BLOCKER_OBSERVER_LIFETIME_MS
       }],
       injectImmediately: true
     }).catch(e => console.error('[ServiceWorker] 注入拦截脚本失败:', e));
@@ -729,6 +838,7 @@ function removeDownloadBlockerFunc() {
 
   delete window.__virusDetectorBlockerState;
   delete window.__virusDetectorInjected;
+  delete window.__virusDetectorInjectedRank; // 必须一并清理，否则重新注入被 rank 守卫拦截
 }
 
 /**
@@ -742,7 +852,15 @@ function injectBlockerFunc(archiveUrls, detectNonArchive, mode, extLists) {
   detectNonArchive = detectNonArchive || false;
   mode = mode || 'full';
 
-  // 避免重复注入
+  // 避免重复注入：使用排名制守卫，允许从低等级升级到高等级。
+  // 注意：rank 检查必须先于 __virusDetectorInjected 检查——
+  // 若先检查 injected，则「移除拦截后重新注入」会被 rank 残留拦截，
+  // 导致条幅/拦截在重新检测时永久失效（历史缺陷）。
+  var MODE_RANK = { lightweight: 1, standard: 2, full: 3 };
+  var newRank = MODE_RANK[mode] || 3;
+  var existingRank = window.__virusDetectorInjectedRank || 0;
+  if (existingRank >= newRank) return;
+
   if (window.__virusDetectorBlockerState || window.__virusDetectorInjected) return;
   var blockerState = {
     anchorClick: null,
@@ -755,11 +873,6 @@ function injectBlockerFunc(archiveUrls, detectNonArchive, mode, extLists) {
   };
   window.__virusDetectorBlockerState = blockerState;
   window.__virusDetectorInjected = true;
-  // 避免重复注入：使用排名制守卫，允许从低等级升级到高等级
-  var MODE_RANK = { lightweight: 1, standard: 2, full: 3 };
-  var newRank = MODE_RANK[mode] || 3;
-  var existingRank = window.__virusDetectorInjectedRank || 0;
-  if (existingRank >= newRank) return;
   window.__virusDetectorInjectedRank = newRank;
 
   // ══════════════════════════════════════════════════════
@@ -1061,8 +1174,9 @@ function injectBlockerFunc(archiveUrls, detectNonArchive, mode, extLists) {
 
   if (document.body) {
     observer.observe(document.body, { childList: true, subtree: true });
-    // 30 秒后停止观察（避免性能影响）
-    setTimeout(function() { observer.disconnect(); }, BLOCKER_OBSERVER_LIFETIME_MS);
+    // 30 秒后停止观察（避免性能影响）；值经 args 传入（闭包不保留，禁止引用模块常量）
+    setTimeout(function() { observer.disconnect(); },
+      (extLists && extLists.observerLifetimeMs) || 30000);
   }
 
   // ══════════════════════════════════════════════════════
@@ -1281,11 +1395,23 @@ async function analyzePage(tabId, url, domain, pageMetrics, linkMetrics) {
   if (!needsDetection) {
     console.log('[ServiceWorker] Gate 未通过，跳过完整检测:', domain);
 
-    // 合并预评估阶段的 Rule 1 结果
-    const rule1Result = tabState._rule1Result || ScoringEngine.evaluateRule1Only(domain);
     const savedWhoisPromise = _whoisPromises.get(tabId);
     const whoisResult = await (savedWhoisPromise || WhoisClient.lookup(domain).catch(() => null));
     _whoisPromises.delete(tabId);
+
+    // 合并预评估阶段的 Rule 1 结果；
+    // 若已有 Content Script 数据（title），用联动评分重算，补齐「内容声称品牌」信号
+    // （Gate 失败路径不跑规则三，ICP 联动保持中性，仅 title/域名年龄联动生效）
+    const baseRule1 = tabState._rule1Result || ScoringEngine.evaluateRule1Only(domain);
+    let rule1Result = baseRule1;
+    if (tabState.title) {
+      rule1Result = ScoringEngine.evaluateRule1Only(domain, {
+        icpResult: null,
+        title: tabState.title,
+        linkMetrics: null,
+        creationDays: (whoisResult && whoisResult.creationDays >= 0) ? whoisResult.creationDays : -1
+      });
+    }
 
     // 复用评分引擎的域名年龄计算（不重复写 S 衰减公式）
     const syncDomainAgeResult = {
@@ -1349,6 +1475,8 @@ async function analyzePage(tabId, url, domain, pageMetrics, linkMetrics) {
   const ctx = {
     url: tabState.url || url,
     domain: tabState.domain || domain,
+    title: tabState.title || '',
+    brandSignals: tabState.brandSignals || null,
     icpStrings: tabState.icpStrings || [],
     textSignals: tabState.textSignals || null,
     hasIcpGovLink: tabState.hasIcpGovLink || false,
@@ -1405,7 +1533,7 @@ async function analyzePage(tabId, url, domain, pageMetrics, linkMetrics) {
 
     // ═══ 阶段2：异步 Whois 域名年龄补充（不阻塞主流程） ═══
     if (tabState._whoisPending) {
-      // 保存上下文用于异步回调中的竞态检查
+      // 保存上下文用于异步回调中的竞态检查与联动重评
       const ctxSnapshot = {
         domain, tabId, pageUrl: tabState.url || url,
         syncScore: syncResult.totalScore,
@@ -1414,7 +1542,16 @@ async function analyzePage(tabId, url, domain, pageMetrics, linkMetrics) {
         officialName: syncResult.officialName,
         isConfirmedOfficial: syncResult.isConfirmedOfficial,
         preliminaryScore: syncResult.preliminaryScore,
-        syncDomainAgeResult: syncResult._syncDomainAgeResult
+        syncDomainAgeResult: syncResult._syncDomainAgeResult,
+        // 完整评分 ctx（供 Whois 返回后的联动重评：规则三/五的老域名降权需要域名年龄）
+        title: tabState.title || '',
+        brandSignals: tabState.brandSignals || null,
+        icpStrings: tabState.icpStrings || [],
+        textSignals: tabState.textSignals || null,
+        hasIcpGovLink: tabState.hasIcpGovLink || false,
+        linkMetrics: tabState.linkMetrics || null,
+        downloadState: tabState.downloadState || { hasDownloadedArchive: false },
+        pageMetrics: tabState.pageMetrics || null
       };
 
       ScoringEngine.evaluateDomainAgePart(
@@ -1424,6 +1561,49 @@ async function analyzePage(tabId, url, domain, pageMetrics, linkMetrics) {
         syncResult.isConfirmedOfficial,
         settings
       ).then(async (whoisResult) => {
+        // 同步阶段域名年龄未知（缓存未命中，规则三/五未做年龄联动）
+        // 且 Whois 现已返回年龄 → 用完整 ctx 重评一次，补齐老域名/新域名联动，
+        // 避免「首访 50 分、刷新后 30 分」的评分随缓存漂移。
+        const ageNowKnown = whoisResult.domainAgeResult &&
+          whoisResult.domainAgeResult.creationDays >= 0;
+        const ageWasUnknown = ctxSnapshot.syncDomainAgeResult &&
+          ctxSnapshot.syncDomainAgeResult.creationDays < 0;
+        if (ageNowKnown && ageWasUnknown) {
+          try {
+            const refreshed = await ScoringEngine.evaluateSync({
+              url: ctxSnapshot.pageUrl,
+              domain: ctxSnapshot.domain,
+              title: ctxSnapshot.title,
+              brandSignals: ctxSnapshot.brandSignals,
+              icpStrings: ctxSnapshot.icpStrings,
+              textSignals: ctxSnapshot.textSignals,
+              hasIcpGovLink: ctxSnapshot.hasIcpGovLink,
+              linkMetrics: ctxSnapshot.linkMetrics,
+              downloadState: ctxSnapshot.downloadState,
+              pageMetrics: ctxSnapshot.pageMetrics
+            }, settings);
+            if (refreshed && typeof refreshed.totalScore === 'number') {
+              // 重评结果已含域名年龄与规则三/五联动 → 直接应用（跳过旧 whoisResult 的分数）
+              await _applyWhoisUpdate({
+                ...ctxSnapshot,
+                syncScore: refreshed.totalScore,
+                syncBreakdown: refreshed.breakdown,
+                correctUrl: refreshed.correctUrl || ctxSnapshot.correctUrl,
+                officialName: refreshed.officialName || ctxSnapshot.officialName
+              }, {
+                ...whoisResult,
+                totalScore: refreshed.totalScore,
+                isSuspicious: refreshed.isSuspicious,
+                riskLevel: refreshed.riskLevel,
+                domainAgeResult: refreshed._syncDomainAgeResult,
+                ageBonusResult: refreshed.breakdown.ageBonus
+              });
+              return;
+            }
+          } catch (e) {
+            console.warn('[ServiceWorker] Whois 后联动重评失败，回退原路径:', domain, e.message);
+          }
+        }
         await _applyWhoisUpdate(ctxSnapshot, whoisResult);
       }).catch(e => {
         console.error('[ServiceWorker] Whois异步补充失败:', domain, e);
@@ -2062,7 +2242,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case MSG_TYPES.PAGE_ANALYSIS_RESULT: {
       const tabId = sender.tab ? sender.tab.id : null;
       if (!tabId) { sendResponse({ received: false }); return false; }
-      const { url, domain, icpStrings, textSignals, pageMetrics, linkMetrics, hasIcpGovLink, needsDetection } = message.payload;
+      const { url, domain, icpStrings, textSignals, pageMetrics, linkMetrics, hasIcpGovLink, needsDetection, title, brandSignals } = message.payload;
 
       // 竞态条件防护：校验 content script 所在标签页的当前 URL 是否与采集数据的域名一致
       // 若用户已导航到其他页面，则丢弃此消息（旧页面的数据不应污染新页面的检测结果）
@@ -2091,6 +2271,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (linkMetrics) ts.linkMetrics = linkMetrics;
         // 存储 Gate 判定结果（Content Script 计算）
         ts._needsDetection = !!(needsDetection);
+        // 存储规则一联动信号：页面 title + 下载意图派生指标（仅计数，不含正文）
+        if (title) ts.title = String(title).substring(0, 200);
+        if (brandSignals) ts.brandSignals = brandSignals;
         // 存储 Resource Resolver 数据
         if (message.payload.resourceData) {
           ts._resourceData = message.payload.resourceData;
@@ -2336,10 +2519,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           const domain = message.payload?.domain || '';
           const addedBy = message.payload?.addedBy || 'manual';
           if (!domain) { sendResponse({ success: false, error: '缺少 domain' }); return; }
-          // 白名单与黑名单互斥：加入黑名单时自动移出白名单
+          // 白名单与黑名单互斥：加入黑名单时自动移出白名单（精确项或覆盖该域的通配符项）
           const whitelist = await loadWhitelist();
-          if (whitelist.includes(domain)) {
-            await saveWhitelist(whitelist.filter(d => d !== domain));
+          const filtered = _filterWhitelistOutDomain(whitelist, domain);
+          if (filtered.length !== whitelist.length) {
+            await saveWhitelist(filtered);
           }
           await SiteBlacklist.add(domain, { addedBy });
           
@@ -2515,7 +2699,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case MSG_TYPES.BULK_UPDATE_WHITELIST: {
       const domains = (message.payload && message.payload.domains) ? message.payload.domains : [];
       saveWhitelist(domains).then(async () => {
-        _whitelistCache = new Set(domains);
         await removeBlockersFromWhitelistedTabs();
         console.log('[ServiceWorker] 白名单已批量更新:', domains.length, '个域名');
         sendResponse({ success: true, count: domains.length });
@@ -2577,15 +2760,36 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
   _whoisPromises.delete(tabId);
 });
 
+// 标签页替换清理（如 prerender 激活、会话恢复时 tabId 变化）
+// 将旧 tabId 的状态迁移到新 tabId（而非直接删除），避免激活页保持"未分析"；
+// 旧 tabId 的会话级内存状态仍需清理。
+chrome.tabs.onReplaced.addListener((addedTabId, removedTabId) => {
+  (async () => {
+    const oldState = await loadTabState(removedTabId);
+    if (oldState && oldState.url) {
+      await saveTabState(addedTabId, oldState);
+    }
+    await clearTabState(removedTabId);
+  })().catch(() => {});
+  _warningCooldown.delete(removedTabId);
+  _authenticationTabs.delete(removedTabId);
+  cancelGateTimeout(removedTabId);
+  _whoisPromises.delete(removedTabId);
+});
+
 // 安装/更新
 chrome.runtime.onInstalled.addListener(async (details) => {
   console.log('[ServiceWorker] 扩展已安装/更新:', details.reason);
   if (details.reason === 'update') {
     await CacheManager.clearAll();
     await DownloadBlacklist.cleanup();
+    // 一次性清理旧版遗留的 local tab_state（已迁移 chrome.storage.session）
+    await cleanupLegacyLocalTabStates();
   }
   // 设置定时更新检查（每 24 小时）
   await chrome.alarms.create(ALARM_NAME_UPDATE_CHECK, { periodInMinutes: UPDATE_CHECK_PERIOD_MINUTES });
+  // 设置定时缓存清理（每 6 小时，配额治理）
+  await chrome.alarms.create(CACHE_CLEANUP_ALARM_NAME, { periodInMinutes: CACHE_CLEANUP_PERIOD_MINUTES });
   // 首次检查
   checkForUpdate();
 });
@@ -2594,20 +2798,51 @@ chrome.runtime.onInstalled.addListener(async (details) => {
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === ALARM_NAME_UPDATE_CHECK) {
     checkForUpdate();
+  } else if (alarm.name === CACHE_CLEANUP_ALARM_NAME) {
+    runCacheCleanup();
   }
 });
+
+/**
+ * 周期缓存清理：删除过期 domain_cache + LRU 裁剪（保留最近 CACHE_LRU_KEEP_COUNT 条）。
+ * 同时兼容旧版本升级：清理 local 中遗留的 tab_state_*（仅当当前介质为 session 时，
+ * 避免 Firefox 回退路径下误删活跃标签页状态）。
+ * 清理统计仅输出日志，不阻塞主流程。
+ */
+async function runCacheCleanup() {
+  try {
+    const stats = await CacheManager.cleanup({ keepRecentCount: CACHE_LRU_KEEP_COUNT });
+    let legacyCleaned = 0;
+    // 仅 session 可用时清理 local 残留（见 cleanupLegacyLocalTabStates 注释）
+    if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.session) {
+      try {
+        const all = await chrome.storage.local.get(null);
+        const legacyKeys = Object.keys(all).filter(k => k.startsWith(STORAGE_KEYS.TAB_STATE_PREFIX));
+        if (legacyKeys.length > 0) {
+          await chrome.storage.local.remove(legacyKeys);
+          legacyCleaned = legacyKeys.length;
+        }
+      } catch (e) { /* 遗留清理失败不影响主清理 */ }
+    }
+    console.log(`[ServiceWorker] 缓存清理完成: 删除 ${stats.removed} 条(过期/LRU), 保留 ${stats.kept}/${stats.total} 条, 遗留 tab_state ${legacyCleaned} 条`);
+  } catch (e) {
+    console.error('[ServiceWorker] 缓存清理失败:', e.message);
+  }
+}
 
 // 存储变更监听：白名单 / 黑名单 / 设置被其他页面修改时使内存缓存失效
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local') {
     if (changes[STORAGE_KEYS.WHITELIST]) {
-      _whitelistCache = null;
+      _invalidateWhitelistCache();
     }
     if (changes[STORAGE_KEYS.DOWNLOAD_BLACKLIST]) {
       DownloadBlacklist.invalidateCache();
     }
     if (changes[STORAGE_KEYS.GLOBAL_SETTINGS]) {
       _settingsCache = null;
+      // 用户修改 cache_ttlHours 后即时生效（失效 CacheManager 的 TTL 缓存）
+      invalidateCacheTtl();
     }
   }
 });

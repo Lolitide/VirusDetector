@@ -55,6 +55,11 @@ import {
   SCORE_RULE_2_TRUSTED_PLATFORM, SCORE_RULE_2_HIJACK,
   SCORE_RULE_2_BATCH_THRESHOLD, SCORE_RULE_2_BATCH_MULTIPLIER,
   SCORE_RULE_2_SUSPICION_MULTIPLIER,
+  SCORE_RULE1_STRONG, SCORE_RULE1_WEAK, SCORE_RULE1_WEAK_NO_CLAIM,
+  SCORE_RULE1_CLAIM_BRAND, SCORE_RULE1_NO_ICP, SCORE_RULE1_ICP_PRESENT,
+  SCORE_RULE1_NEW_DOMAIN, SCORE_RULE1_OLD_DOMAIN, SCORE_RULE1_DOWNLOAD,
+  SCORE_RULE3_OLD_DOMAIN_DEDUCT, SCORE_RULE3_NO_CLAIM_DEDUCT,
+  SCORE_RULE3_TRUSTED_DEDUCT, SCORE_RULE3_MIN_SCORE,
   ARCHIVE_EXTENSIONS, AI_PAGE_THRESHOLDS, SAME_PAGE_LINK_THRESHOLD,
   DEAD_LINK_THRESHOLD,
   SCORE_DOMAIN_AGE_MAX, DOMAIN_AGE_DECAY_A, DOMAIN_AGE_DECAY_B,
@@ -155,18 +160,54 @@ export class ScoringEngine {
   static async evaluateSync(ctx, settings = null) {
     const {
       url, domain, textSignals, icpStrings, hasIcpGovLink,
-      linkMetrics, downloadState, pageMetrics
+      linkMetrics, downloadState, pageMetrics, title, brandSignals
     } = ctx;
 
 
     // 推入当前 settings 到栈顶，使私有方法可通过 resolveSetting() 读取
     setActiveSettings(settings);
-    // 规则一：域名仿冒检测（可通过设置关闭）
-    const result1 = resolveSetting('rule1Enabled', true) ? this._evaluateRule1(domain) : { score: 0, triggered: false, status: 'disabled', detail: '规则一已关闭', detailCN: '域名仿冒: 已关闭' };
-    const existingScore = result1.score;
 
-    // 规则三：ICP检测（可通过设置关闭）
-    const result3 = resolveSetting('rule3Enabled', true) ? this._evaluateRule3(domain, undefined, icpStrings, hasIcpGovLink, textSignals, ctx.icpApi, result1.triggered) : { score: 0, triggered: false, status: 'disabled', detail: '规则三已关闭', detailCN: 'ICP备案: 已关闭' };
+    // ---- 规则一联动预判 ----
+    // 规则三需要知道「本域名是否在仿冒某品牌」（impersonating 参数，用于盗用备案号判定）；
+    // 规则一又需要规则三的 ICP 结果做联动降权/增强。故先做一次轻量预判（不评分），
+    // 传给规则三，再用规则三结果跑正式规则一（联动评分）。
+    // 注意：impersonating 需「域名嫌疑 + 页面 title 声称该品牌」双重条件，
+    // 避免 tongyi.com 等「域名撞词但页面未自称该品牌、且有自身备案」的合法站被误判为盗用备案号。
+    // 预判必须走 evaluateRule1Only（含 BRAND_TLDS/TrustedPlatforms/findByDomain 前置守卫），
+    // 避免 deepseek.github.io 等可信平台子页被误判为 impersonating。
+    const preRule1 = resolveSetting('rule1Enabled', true) ? this.evaluateRule1Only(domain) : null;
+    const preSpoofEntry = (preRule1 && preRule1.triggered) ? preRule1.matchedEntry : null;
+    const preImpersonating = !!(preSpoofEntry && this._titleClaimsBrand(title || '', preSpoofEntry));
+
+    // ---- 可信档案（TrustProfile）前置部分 ----
+    // 供规则三(ICP)与规则五(代码工程化)联动降权。前置部分不依赖规则三结果：
+    //   老域名 / title 未声称任何品牌 / AI 生成痕迹(meta generator) / 可信外链
+    //   均为「合法性信号」，与域名仿冒判定无关，可提前计算。
+    const cachedWhoisForProfile = WhoisClient.getCached(domain);
+    const creationDaysProfile = (cachedWhoisForProfile && cachedWhoisForProfile.creationDays >= 0)
+      ? cachedWhoisForProfile.creationDays : -1;
+    const icpProfile = {
+      creationDays: creationDaysProfile,
+      claimsAnyBrand: this._titleClaimsAnyBrand(title || ''),
+      aiGenerator: !!(pageMetrics && pageMetrics.generator),
+      trustedExternalLinks: (brandSignals && Number(brandSignals.trustedExternalLinks)) || 0
+    };
+
+    // 规则三：ICP检测（先于规则一执行，供规则一联动降权/增强）
+    const result3 = resolveSetting('rule3Enabled', true) ? this._evaluateRule3(domain, undefined, icpStrings, hasIcpGovLink, textSignals, ctx.icpApi, preImpersonating, icpProfile) : { score: 0, triggered: false, status: 'disabled', detail: '规则三已关闭', detailCN: 'ICP备案: 已关闭' };
+
+    // 规则一：域名仿冒（分级嫌疑 + 多特征联动评分）
+    const cachedWhois = WhoisClient.getCached(domain);
+    const rule1Options = {
+      icpResult: result3,
+      title: title || '',
+      brandSignals: brandSignals || null,
+      linkMetrics: linkMetrics || null,
+      // 域名年龄联动：仅缓存命中时生效（异步阶段由 evaluateDomainAgePart 补充）
+      creationDays: (cachedWhois && cachedWhois.creationDays >= 0) ? cachedWhois.creationDays : -1
+    };
+    const result1 = resolveSetting('rule1Enabled', true) ? this._evaluateRule1(domain, rule1Options) : { score: 0, triggered: false, status: 'disabled', detail: '规则一已关闭', detailCN: '域名仿冒: 已关闭' };
+    const existingScore = result1.score;
 
     // 官方站点早期退出
     const isConfirmedOfficial = (
@@ -187,8 +228,18 @@ export class ScoringEngine {
         detailCN: '代码工程化: 官方网站'
       };
     } else {
+      // 规则五联动档案（完整版：含规则一/三结果，供结构信号降权）
+      const rule5Profile = {
+        domainSuspicion: result1.severity || 'none',
+        claimsBrand: result1.claimsBrand || false,
+        creationDays: creationDaysProfile,
+        icpStatus: result3.status,
+        icpTriggered: result3.triggered,
+        aiGenerator: icpProfile.aiGenerator,
+        trustedExternalLinks: icpProfile.trustedExternalLinks
+      };
       result4 = resolveSetting('rule4Enabled', true) ? this._evaluateRule4(linkMetrics, domain) : { score: 0, triggered: false, status: 'disabled', detail: '规则四已关闭', detailCN: '链接分析: 已关闭' };
-      result5 = resolveSetting('rule5Enabled', true) ? this._evaluateRule5(pageMetrics, domain, undefined, textSignals) : { score: 0, triggered: false, status: 'disabled', detail: '规则五已关闭', detailCN: '代码工程化: 已关闭' };
+      result5 = resolveSetting('rule5Enabled', true) ? this._evaluateRule5(pageMetrics, domain, undefined, textSignals, rule5Profile) : { score: 0, triggered: false, status: 'disabled', detail: '规则五已关闭', detailCN: '代码工程化: 已关闭' };
     }
 
     // 规则二：Phase A 主动扫描 + Phase B 被动检测
@@ -406,17 +457,73 @@ export class ScoringEngine {
   /**
    * 独立运行规则一（供 Gate 预评估阶段使用，无需 Content Script 数据）。
    * @param {string} domain - 页面域名
+   * @param {Object} [options] - 联动信号（可选）：{ icpResult, title, linkMetrics, creationDays }
    * @returns {Object} 规则一结果
    */
-  static evaluateRule1Only(domain) {
-    return this._evaluateRule1(domain);
+  static evaluateRule1Only(domain, options = null) {
+    return this._evaluateRule1(domain, options);
   }
 
-  static _evaluateRule1(domain) {
+  /**
+   * 判断页面 title 是否声称/提及被仿冒品牌。
+   * 仅比对短文本 title（已截断 200 字符），不涉及页面正文，符合隐私约束。
+   * 命中条件（任一）：title 包含品牌名（去空格）、官方注册域标签、或任一 ASCII 关键词（长度 ≥ 4）。
+   * @param {string} title - 页面标题
+   * @param {Object} entry - 被仿冒品牌条目
+   * @returns {boolean}
+   */
+  static _titleClaimsBrand(title, entry) {
+    if (!title || !entry) return false;
+    const t = String(title).toLowerCase().replace(/\s+/g, '');
+    // 品牌名（去空格）：英文品牌 ≥ 4 字符；中文品牌 ≥ 2 字符（微信/腾讯/淘宝等）
+    const nameNorm = (entry.name || '').toLowerCase().replace(/\s+/g, '');
+    const isCjkName = /[\u4e00-\u9fff]/.test(nameNorm);
+    if (nameNorm.length >= 4 && t.includes(nameNorm)) return true;
+    if (isCjkName && nameNorm.length >= 2 && t.includes(nameNorm)) return true;    // 官方注册域标签：如 qianwenai（platform.qianwenai.com 的注册域标签）
+    for (const domain of entry.officialDomains || []) {
+      try {
+        const label = UrlUtils.getMainDomain(domain).split('.')[0];
+        if (label && label.length >= 5 && t.includes(label)) return true;
+      } catch (e) { /* 忽略无法解析的官方域 */ }
+    }
+    // ASCII 关键词（长度 ≥ 4）：如 deepseek / weixin / kimi
+    for (const kw of entry.keywords || []) {
+      const k = String(kw).toLowerCase();
+      if (/^[a-z0-9]{4,}$/.test(k) && t.includes(k)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * 判断页面 title 是否声称/提及「任何」品牌（不针对特定被仿冒品牌）。
+   * 供规则三/五的可信档案使用：title 未声称任何品牌是合法个人/开源站的常见特征，
+   * 此时无备案的处罚应降权。
+   * @param {string} title - 页面标题
+   * @returns {boolean}
+   */
+  static _titleClaimsAnyBrand(title) {
+    if (!title) return false;
+    const t = String(title).toLowerCase().replace(/\s+/g, '');
+    for (const entry of DomainDatabase.getAllEntries()) {
+      // 品牌名（去空格）：英文品牌 ≥ 4 字符；中文品牌 ≥ 2 字符（微信/腾讯/QQ/淘宝等）
+      const nameNorm = (entry.name || '').toLowerCase().replace(/\s+/g, '');
+      const isCjkName = /[\u4e00-\u9fff]/.test(nameNorm);
+      if (nameNorm.length >= 4 && t.includes(nameNorm)) return true;
+      if (isCjkName && nameNorm.length >= 2 && t.includes(nameNorm)) return true;
+      for (const kw of entry.keywords || []) {
+        const k = String(kw).toLowerCase();
+        if (/^[a-z0-9]{4,}$/.test(k) && t.includes(k)) return true;
+      }
+    }
+    return false;
+  }
+
+  static _evaluateRule1(domain, options = null) {
     const result = {
       score: 0, triggered: false, status: 'pass',
       detail: '', detailCN: '域名检查: 无异常',
-      matchedEntry: null, correctUrl: null, officialName: null
+      matchedEntry: null, correctUrl: null, officialName: null,
+      severity: null, claimsBrand: false
     };
 
     const mainDomain = UrlUtils.getMainDomain(domain);
@@ -451,13 +558,91 @@ export class ScoringEngine {
     // 检测域名仿冒（使用完整 hostname，子域名中可能含品牌关键词）
     const spoof = DomainDatabase.detectSpoof(domain);
     if (spoof) {
-      result.score = resolveSetting('rule1_score', SCORE_RULE_1);  // +60
       result.triggered = true;
       result.matchedEntry = spoof.entry;
       result.correctUrl = spoof.correctUrl;
       result.officialName = spoof.entry.name;
+      result.severity = spoof.severity;
       result.detail = `域名仿冒检测: ${spoof.matchedBy}`;
       result.detailCN = `域名仿冒: 疑似冒充「${spoof.entry.name}」(${spoof.correctUrl})`;
+
+      // ==================== 联动评分（取代原固定 +60 硬处理） ====================
+      // 基础分：STRONG 45 / WEAK 10；叠加/抵消联动特征后封顶 60、下限 0。
+      // 设计目标：仅域名相似（无其他可疑特征）远不足以触发警告阈值（100），
+      // 必须「域名相似 + 内容声称品牌 / 无备案 / 新域名 / 诱导下载」等多特征聚合。
+      const isStrong = spoof.severity === 'strong';
+      let score = resolveSetting('rule1_strongScore', SCORE_RULE1_STRONG);
+      if (!isStrong) score = resolveSetting('rule1_weakScore', SCORE_RULE1_WEAK);
+      const reasons = [];
+
+      // 1. 内容声称品牌（title 比对）→ 增强；WEAK 且完全不声称 → 减半
+      const title = (options && options.title) || '';
+      const claimsBrand = this._titleClaimsBrand(title, spoof.entry);
+      result.claimsBrand = claimsBrand;
+      if (claimsBrand) {
+        score += resolveSetting('rule1_claimBrandScore', SCORE_RULE1_CLAIM_BRAND);
+        reasons.push(`页面 title 声称品牌「${spoof.entry.name}」`);
+      } else if (!isStrong) {
+        score = resolveSetting('rule1_weakNoClaimScore', SCORE_RULE1_WEAK_NO_CLAIM);
+        reasons.push('页面未声称任何品牌，弱嫌疑减半');
+      }
+
+      // 2. ICP 备案联动（仅当规则三给出明确判定时）：
+      //    status='pass' 且未触发 → 有备案核验通过 → 降权；
+      //    触发（无备案/虚假/盗用）→ 增强；neutral（外国站/非中文豁免）→ 不联动。
+      const icpResult = options && options.icpResult;
+      if (icpResult) {
+        if (icpResult.status === 'pass' && !icpResult.triggered) {
+          score -= resolveSetting('rule1_icpPresentScore', SCORE_RULE1_ICP_PRESENT);
+          reasons.push('ICP 备案核验通过');
+        } else if (icpResult.triggered) {
+          score += resolveSetting('rule1_noIcpScore', SCORE_RULE1_NO_ICP);
+          reasons.push(icpResult.icpStolen ? 'ICP 备案疑似盗用' : '未检测到有效 ICP 备案');
+        }
+      }
+
+      // 3. 域名年龄联动（仅缓存命中时；新域名增强，老域名降权）
+      const creationDays = (options && typeof options.creationDays === 'number') ? options.creationDays : -1;
+      if (creationDays >= 0) {
+        if (creationDays < 90) {
+          score += resolveSetting('rule1_newDomainScore', SCORE_RULE1_NEW_DOMAIN);
+          reasons.push(`域名注册仅 ${creationDays} 天`);
+        } else if (creationDays > 730) {
+          score -= resolveSetting('rule1_oldDomainScore', SCORE_RULE1_OLD_DOMAIN);
+          reasons.push(`域名注册 ${creationDays} 天（长期域名）`);
+        }
+      }
+
+      // 4. 下载意图联动：页面存在指向非官方域的跨域下载链接，或正文含下载诱导词
+      //    （brandSignals.downloadIntentWords ≥ 3 次，避免普通页面零星提及误判）→ 增强
+      const linkMetrics = options && options.linkMetrics;
+      const brandSignals = options && options.brandSignals;
+      let hasSuspiciousDownload = false;
+      if (linkMetrics && Array.isArray(linkMetrics.externalDownloadLinks) &&
+          linkMetrics.externalDownloadLinks.length > 0) {
+        // 检查是否全部指向被仿冒品牌的官方域（指向官方域不构成增强）
+        const officialHosts = new Set(
+          (spoof.entry.officialDomains || []).map(d => d.replace(/^www\./i, '').toLowerCase())
+        );
+        hasSuspiciousDownload = linkMetrics.externalDownloadLinks.some(link => {
+          try {
+            const host = new URL(link.url || link.href || '').hostname.replace(/^www\./i, '').toLowerCase();
+            return !officialHosts.has(host);
+          } catch (e) {
+            return false;
+          }
+        });
+      }
+      const hasDownloadIntentText = !!(brandSignals &&
+        Number(brandSignals.downloadIntentWords) >= 3);
+      if (hasSuspiciousDownload || hasDownloadIntentText) {
+        score += resolveSetting('rule1_downloadScore', SCORE_RULE1_DOWNLOAD);
+        reasons.push(hasSuspiciousDownload ? '存在指向非官方域的下载链接' : '页面正文含多处下载诱导词');
+      }
+
+      result.score = Math.max(0, Math.min(SCORE_RULE_1, score));
+      result.detail += `（联动评分 ${result.score}/60：${reasons.join('；') || '无额外特征'}）`;
+      result.detailCN += `（联动评分 ${result.score}）`;
       return result;
     }
 
@@ -734,10 +919,45 @@ export class ScoringEngine {
  *   2c. ICP + 缺政府链接 且 无中文         → +30 TRIGGERED（虚假备案嫌疑）
  *   2d. ICP 号码在黑名单中                → 同 2b/2c（按有无中文判定）
  *   3.  无 ICP + 豁免白名单               → 0  NEUTRAL
- *   4.  无 ICP + 有中文                   → +50 TRIGGERED
+ *   4.  无 ICP + 有中文                   → +50 TRIGGERED（可信档案下可降至 +10）
  *   5.  无 ICP + 无中文 + 非白名单         → +20 WARN
    */
-  static _evaluateRule3(domain, pageText, icpStrings, hasIcpGovLink, textSignals, icpApi, impersonating = false) {
+
+  /**
+   * 规则三联动降权：无备案分支按「可信档案」合法性信号削减分值（保持 rule3_score 上限）。
+   * 降权因子（可叠加）：
+   *   - 老域名（注册 > 730 天）：-SCORE_RULE3_OLD_DOMAIN_DEDUCT
+   *   - title 未声称任何品牌：-SCORE_RULE3_NO_CLAIM_DEDUCT
+   *   - 存在可信信号（可信外链或 meta generator）：-SCORE_RULE3_TRUSTED_DEDUCT
+   * 下限 SCORE_RULE3_MIN_SCORE（保留法规信号，不归零）。
+   * 设计意图：无备案本身是弱信号——个人开源工具站、新上线的合法站点大量无备案；
+   * 而「无备案 + 新域名 + 声称品牌 + 无可信信号」的组合才是钓鱼典型特征。
+   * @param {Object|null} profile - TrustProfile（由 evaluateSync 构建）
+   * @returns {{score: number, notes: string}}
+   */
+  static _applyIcpDeductions(profile) {
+    let score = resolveSetting('rule3_score', SCORE_RULE_3);
+    const notes = [];
+    if (profile) {
+      if (typeof profile.creationDays === 'number' && profile.creationDays > 730) {
+        score -= resolveSetting('rule3_oldDomainDeduct', SCORE_RULE3_OLD_DOMAIN_DEDUCT);
+        notes.push(`老域名(${profile.creationDays}天)`);
+      }
+      if (profile.claimsAnyBrand === false) {
+        score -= resolveSetting('rule3_noClaimDeduct', SCORE_RULE3_NO_CLAIM_DEDUCT);
+        notes.push('title未声称品牌');
+      }
+      if (profile.trustedExternalLinks > 0 || profile.aiGenerator) {
+        score -= resolveSetting('rule3_trustedDeduct', SCORE_RULE3_TRUSTED_DEDUCT);
+        notes.push(profile.trustedExternalLinks > 0
+          ? `可信外链${profile.trustedExternalLinks}个`
+          : 'AI生成页面(generator)');
+      }
+    }
+    score = Math.max(resolveSetting('rule3_minScore', SCORE_RULE3_MIN_SCORE), score);
+    return { score, notes: notes.join('、') };
+  }
+  static _evaluateRule3(domain, pageText, icpStrings, hasIcpGovLink, textSignals, icpApi, impersonating = false, profile = null) {
     const result = {
       score: 0, triggered: false,
       detail: '', detailCN: '', icpFound: false, icpNumbers: [],
@@ -884,15 +1104,16 @@ export class ScoringEngine {
     }
 
     // 3a'. 中国域名（.cn 体系）受《互联网信息服务管理办法》ICP 备案制度管辖，必须有备案。
-    //     即使页面中英混排导致 CJK 占比偏低、被误判为「非中文」，只要未找到 ICP 即判违规（+50），
+    //     即使页面中英混排导致 CJK 占比偏低、被误判为「非中文」，只要未找到 ICP 即判违规，
     //     彻底避免 .com.cn / .net.cn 等中文钓鱼站借「非中文」中性跳过备案检查。
     //     （gov.cn / edu.cn 等已在 3a 豁免白名单中提前返回，不在此分支。）
     if (/(^|\.)cn$/i.test(domain)) {
-      result.score = resolveSetting('rule3_score', SCORE_RULE_3);  // +50
+      const { score: deductScore, notes } = this._applyIcpDeductions(profile);
+      result.score = deductScore; // _applyIcpDeductions 内部已保证下限
       result.triggered = true;
       Object.assign(result, withApiNote(
-        `未检测到ICP备案号（中国域名 ${domain}，受 ICP 备案制度管辖）`,
-        'ICP备案: 未检测到备案号（中国域名）'
+        `未检测到ICP备案号（中国域名 ${domain}，受 ICP 备案制度管辖${notes ? '；降权: ' + notes : ''}）`,
+        `ICP备案: 未检测到备案号（中国域名）${notes ? '（降权: ' + notes + '）' : ''}`
       ));
       return result;
     }
@@ -900,11 +1121,12 @@ export class ScoringEngine {
     // 3b. 页面内容检测：有显著中文内容 → 中国站点，必须有 ICP
     const cjkResult = this._getCjkResult(pageText, textSignals);
     if (cjkResult.hasCJK) {
-      result.score = resolveSetting('rule3_score', SCORE_RULE_3);  // +50
+      const { score: deductScore, notes } = this._applyIcpDeductions(profile);
+      result.score = deductScore; // _applyIcpDeductions 内部已保证下限
       result.triggered = true;
       Object.assign(result, withApiNote(
-        `未检测到ICP备案号（域名${domain}，页面含${cjkResult.cjkCount}个中文字符，占比${(cjkResult.cjkRatio * 100).toFixed(1)}%）`,
-        'ICP备案: 未检测到备案号'
+        `未检测到ICP备案号（域名${domain}，页面含${cjkResult.cjkCount}个中文字符，占比${(cjkResult.cjkRatio * 100).toFixed(1)}%${notes ? '；降权: ' + notes : ''}）`,
+        `ICP备案: 未检测到备案号${notes ? '（降权: ' + notes + '）' : ''}`
       ));
       return result;
     }
@@ -1080,8 +1302,9 @@ export class ScoringEngine {
    * @param {string} domain - 页面域名（保留参数，供未来扩展）
    * @param {string} pageText - 页面文本内容（兼容旧消息；新消息使用 textSignals）
    * @param {Object} textSignals - 内容脚本本地计算的派生文本指标
+   * @param {Object|null} profile - 可信档案（由 evaluateSync 构建；供联动降权）
    */
-  static _evaluateRule5(pageMetrics, domain, pageText, textSignals) {
+  static _evaluateRule5(pageMetrics, domain, pageText, textSignals, profile = null) {
     const result = {
       score: 0, triggered: false, status: 'pass',
       detail: '', detailCN: '代码工程化: 正常',
@@ -1168,6 +1391,34 @@ export class ScoringEngine {
     } else {
       signalDetail = '页面文本内容不足，跳过结构信号检测';
       signalDetailCN = '代码工程化: 内容不足';
+    }
+
+    // ---- 联动降权（可信档案）----
+    // 页面特征信号在「无域名嫌疑 + 老域名 + 备案通过/中性 + 未声称品牌」的可信档案下减半；
+    // 叠加 AI 可信特征（meta generator + 可信外链）→ 归零。
+    // 设计意图：AI 生成的合法工具站/静态文档站天然命中「无框架+DOM简单+资源少」信号，
+    // 但若页面无仿冒声称、域名无嫌疑、域名老、备案正常，则这些信号更可能是
+    // 轻量技术栈而非恶意特征。域名有嫌疑或页面声称品牌 → 不降权（保持原分）。
+    if (signalScore > 0 && profile) {
+      const noSuspicion = !profile.domainSuspicion || profile.domainSuspicion === 'none';
+      const isOldDomain = typeof profile.creationDays === 'number' && profile.creationDays > 730;
+      const icpNeutral = !profile.icpTriggered &&
+        (profile.icpStatus === 'pass' || profile.icpStatus === 'neutral');
+      const noClaim = !profile.claimsBrand;
+      const aiTrusted = !!(profile.aiGenerator && profile.trustedExternalLinks > 0);
+      if (noSuspicion && isOldDomain && icpNeutral && noClaim) {
+        const origScore = signalScore;
+        if (aiTrusted) {
+          signalScore = 0;
+          signalTriggered = false; // 归零后不再视为触发（避免 UI 出现"触发但 0 分"）
+          signalDetail += `（可信档案降权：AI生成特征+可信外链，结构信号归零，原${origScore}分）`;
+          signalDetailCN += `（可信降权→0）`;
+        } else {
+          signalScore = Math.floor(origScore / 2);
+          signalDetail += `（可信档案降权：无嫌疑+老域名+无声称，结构信号减半 ${origScore}→${signalScore}）`;
+          signalDetailCN += `（可信降权 ${origScore}→${signalScore}）`;
+        }
+      }
     }
 
     // ---- 合并子规则 A + B ----

@@ -33,11 +33,26 @@ export const DOWNLOAD_DENSITY_THRESHOLD = 2.0;
 /** 触发下载确认弹窗的阈值（不注入页面拦截，仅弹窗二次确认） */
 export const DOWNLOAD_CONFIRM_THRESHOLD = 80;
 
-export const SCORE_RULE_1 = 60;              // 规则一：域名仿冒
+export const SCORE_RULE_1 = 60;              // 规则一：域名仿冒（封顶）
+// 规则一联动评分（分级嫌疑 + 多特征联动，取代原「命中即 +60」硬处理）：
+export const SCORE_RULE1_STRONG = 45;        // STRONG 嫌疑基础分（typosquat/官方域标签/形近/堆叠/拼音）
+export const SCORE_RULE1_WEAK = 10;          // WEAK 嫌疑基础分（弱关键词段/子串命中）
+export const SCORE_RULE1_WEAK_NO_CLAIM = 5;  // WEAK 且页面未声称任何品牌 → 减半（+5）
+export const SCORE_RULE1_CLAIM_BRAND = 20;   // 页面 title 声称被仿冒品牌 → 增强
+export const SCORE_RULE1_NO_ICP = 10;        // 无 ICP 备案 → 增强
+export const SCORE_RULE1_ICP_PRESENT = 15;   // 有 ICP 备案（且页面展示备案号）→ 降权
+export const SCORE_RULE1_NEW_DOMAIN = 10;    // 域名注册 < 90 天 → 增强
+export const SCORE_RULE1_OLD_DOMAIN = 10;    // 域名注册 > 730 天 → 降权
+export const SCORE_RULE1_DOWNLOAD = 10;      // 页面存在指向非官方跨域下载链接 → 增强
 export const SCORE_RULE_2_HIGH = 40;         // 规则二：压缩包下载（域名已有≥30嫌疑）
 export const SCORE_RULE_2_LOW = 10;          // 规则二：压缩包下载（弱信号）
 export const SCORE_RULE_3 = 50;             // 规则三：ICP备案号缺失（所有网站）
 export const SCORE_RULE_3_FAKE = 30;        // 规则三：ICP备案号存在但无法核验（无政府链接/虚假号码）
+// 规则三联动降权（保持 50 上限，可信档案下可降至下限 SCORE_RULE3_MIN_SCORE）：
+export const SCORE_RULE3_OLD_DOMAIN_DEDUCT = 20;  // 老域名（注册 > 730 天）→ 无备案降权
+export const SCORE_RULE3_NO_CLAIM_DEDUCT = 10;    // 页面 title 未声称任何品牌 → 无备案降权
+export const SCORE_RULE3_TRUSTED_DEDUCT = 10;     // 存在可信信号（可信外链或 meta generator）→ 无备案降权
+export const SCORE_RULE3_MIN_SCORE = 10;          // 无备案分支最低分（保留法规信号，不归零）
 
 // 规则四：链接分析
 export const SCORE_RULE_4A_SAME_PAGE = 20;      // 规则四A-① ≥8个链接指向当前页本身（完全一致URL）
@@ -162,6 +177,20 @@ export const EXECUTABLE_EXTENSIONS = [
 
 // 文件扩展名（压缩包 + 可执行文件，规则四B-b；由两份列表派生，保证永不漂移）
 export const FILE_EXTENSIONS = [...new Set([...ARCHIVE_EXTENSIONS, ...EXECUTABLE_EXTENSIONS])];
+
+// ==================== 可信外链域名（开源/标准/文档平台） ====================
+// 页面链接指向这些平台（或其子域）是「开源项目/文档/学术性质」的反向信号，
+// 用于规则三(ICP)与规则五(代码工程化)的可信降权。小而精原则：
+// 只收录攻击者难以伪造的托管平台与标准组织，不收录泛用 CDN/资讯站。
+// 匹配规则：链接 hostname 等于列表项或以其为后缀（如 xxx.github.io 命中 github.io）。
+export const TRUSTED_EXTERNAL_DOMAINS = [
+  // 代码托管
+  'github.com', 'github.io', 'gist.github.com', 'gitee.com', 'gitlab.com',
+  'gitcode.com', 'coding.net', 'bitbucket.org', 'sourceforge.net',
+  // 文档 / 标准 / 学术
+  'readthedocs.io', 'readthedocs.org', 'docs.rs', 'mozilla.org',
+  'developer.mozilla.org', 'w3.org', 'arxiv.org', 'doi.org'
+];
 
 // ==================== 代码工程化检测（规则五） ====================
 export const AI_PAGE_THRESHOLDS = {
@@ -315,6 +344,16 @@ export const UI_KEYS = {
 };
 
 export const CACHE_TTL = 24 * 60 * 60 * 1000;  // 24 小时
+
+// ==================== 缓存清理（配额治理） ====================
+/** 域名缓存 LRU 保留条数：定期/紧急清理时保留最近访问的 N 条 */
+export const CACHE_LRU_KEEP_COUNT = 100;
+/** 缓存条目 lastAccess 刷新限频：get() 命中时距上次刷新 ≥ 该间隔才写回，避免 IO 放大 */
+export const CACHE_LAST_ACCESS_REFRESH_MS = 10 * 60 * 1000; // 10 分钟
+/** 周期清理 alarm 名称 */
+export const CACHE_CLEANUP_ALARM_NAME = 'cache-cleanup';
+/** 周期清理间隔（分钟）：每 6 小时扫描一次过期/超量缓存 */
+export const CACHE_CLEANUP_PERIOD_MINUTES = 6 * 60;
 
 export const DAY_MS = 24 * 60 * 60 * 1000;  // 1 天
 
