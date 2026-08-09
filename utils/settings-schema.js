@@ -47,6 +47,9 @@ import {
   WHOIS_API_TIMEOUT, MIN_WHOIS_INTERVAL_MS, WARNING_COOLDOWN_MS,
   THEME_VALUES, PRESET_LEVELS
 } from './constants.js';
+import {
+  WARNING_INTERVENTION_MODES, DEFAULT_WARNING_INTERVENTION_MODE
+} from './warning-intervention.js';
 
 // ==================== Schema 版本 ====================
 // 版本迁移见文件尾 migrateSettings()

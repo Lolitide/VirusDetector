@@ -54,6 +54,9 @@ import {
   DOWNLOAD_CONFIRM_ACTIONS, REPORT_TYPES
 } from '../utils/constants.js';
 import { SETTINGS_DEFAULTS, migrateSettings } from '../utils/settings-schema.js';
+import {
+  shouldTriggerWarningFlow, shouldUseFullPageWarning
+} from '../utils/warning-intervention.js';
 
 // ==================== URL 协议守卫 ====================
 
@@ -88,6 +91,34 @@ function isPrivateOrLocalIp(hostname) {
   if (a === 172 && b >= 16 && b <= 31) return true;    // 172.16.0.0/12 私有
   if (a === 169 && b === 254) return true;             // 169.254.0.0/16 链路本地
   return false;
+}
+
+// 扩展内页面 URL（拦截页/报告页），用于身份校验与“返回上一页”判定
+const WARNING_PAGE_URL = chrome.runtime.getURL('warning/warning.html');
+const REPORT_PAGE_URL = chrome.runtime.getURL('warning/report.html');
+
+/**
+ * 判断 URL 是否属于扩展内的指定页面（同 origin + 同 pathname）。
+ * @param {string} url
+ * @param {string} pageUrl 扩展内页面 URL（如 WARNING_PAGE_URL）
+ * @returns {boolean}
+ */
+function isExtensionPage(url, pageUrl) {
+  try {
+    const parsed = new URL(url || '');
+    const expected = new URL(pageUrl);
+    return parsed.origin === expected.origin && parsed.pathname === expected.pathname;
+  } catch {
+    return false;
+  }
+}
+
+function isWarningPageUrl(url) {
+  return isExtensionPage(url, WARNING_PAGE_URL);
+}
+
+function isReportPageUrl(url) {
+  return isExtensionPage(url, REPORT_PAGE_URL);
 }
 
 function shouldSkipUrl(url) {
@@ -700,6 +731,273 @@ async function loadGlobalSettings() {
 
 const _authenticationTabs = new Set();
 
+/** 每个标签页的警告冷却期（5 秒内不重复弹窗）：tabId → 上次警告时间戳 */
+const _warningCooldown = new Map();
+
+/** 自动安全报告打开的并发锁：lockKey → Promise（防止同一标签页重复打开报告） */
+const _automaticReportOpenings = new Map();
+
+// ==================== 分析身份标识 ====================
+// 用于防止异步分析完成时页面已导航走（竞态）：URL + 导航代数 + 文档 ID 三者唯一标识一次分析。
+
+/** 从标签页状态提取分析身份标识 */
+function createAnalysisIdentity(tabState) {
+  return {
+    url: tabState.url || '',
+    navigationGeneration: tabState.navigationGeneration ?? 0,
+    analysisDocumentId: tabState.analysisDocumentId || ''
+  };
+}
+
+function matchesAnalysisIdentity(expected, current) {
+  return expected.url === current.url &&
+    expected.navigationGeneration === current.navigationGeneration &&
+    expected.analysisDocumentId === current.analysisDocumentId;
+}
+
+function tabStateMatchesAnalysisIdentity(tabState, expected) {
+  return matchesAnalysisIdentity(expected, createAnalysisIdentity(tabState));
+}
+
+/** 读取当前真实导航身份（URL/代数/文档 ID），用于与预期身份比对 */
+async function getCurrentAnalysisIdentity(tabId) {
+  const navigation = _navigationStates.get(tabId);
+  const tab = await chrome.tabs.get(tabId);
+  const frame = await chrome.webNavigation.getFrame({ tabId, frameId: 0 }).catch(() => null);
+  return {
+    url: frame?.url || tab.url || '',
+    navigationGeneration: _navigationGenerations.get(tabId) ?? navigation?.generation ?? 0,
+    analysisDocumentId: frame?.documentId || navigation?.documentId || ''
+  };
+}
+
+/**
+ * 校验某次分析的身份是否仍与当前页面一致（防止竞态误伤）。
+ * @param {number} tabId
+ * @param {Object} expected 预期身份（createAnalysisIdentity 产物）
+ * @param {Object} [options] { allowWarningPage, allowPending }
+ * @returns {Promise<boolean>}
+ */
+async function isCurrentAnalysisIdentity(tabId, expected, options = {}) {
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    if (options.allowWarningPage && isWarningPageUrl(tab.url || '')) {
+      const tabState = await loadTabState(tabId);
+      return tabState._blockedContext?.url === expected.url;
+    }
+
+    const navigation = _navigationStates.get(tabId);
+    if (options.allowPending && navigation?.generation === expected.navigationGeneration &&
+        navigation.url === expected.url) {
+      if (!navigation.committed) return true;
+      const current = await getCurrentAnalysisIdentity(tabId);
+      return current.url === expected.url &&
+        current.navigationGeneration === expected.navigationGeneration &&
+        current.analysisDocumentId === (navigation.documentId || current.analysisDocumentId);
+    }
+
+    const current = await getCurrentAnalysisIdentity(tabId);
+    return matchesAnalysisIdentity(expected, current);
+  } catch {
+    return false;
+  }
+}
+
+// ==================== 拦截上下文 ====================
+// 拦截页/报告页通过 nonce 证明自己来自本次拦截，防止任意页面冒充操作。
+
+/** 生成一次性 nonce（crypto.randomUUID，低版本回退随机 hex） */
+function createBlockedNonce() {
+  if (typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  return [...bytes].map(value => value.toString(16).padStart(2, '0')).join('');
+}
+
+/**
+ * 校验拦截页消息的来源与 nonce，返回对应的标签页与拦截上下文。
+ * @throws {Error} 来源无效（非扩展拦截页 / nonce 不匹配 / 过期）
+ */
+async function requireBlockedContext(sender, nonce, pageUrl) {
+  if (!sender.tab?.id || !nonce || !isExtensionPage(sender.url, pageUrl)) {
+    throw new Error('invalid_blocked_context');
+  }
+
+  const tabState = await loadTabState(sender.tab.id);
+  const context = tabState._blockedContext;
+  if (!context || context.nonce !== nonce || shouldSkipUrl(context.url) ||
+      Date.now() - context.createdAt > 30 * 60 * 1000) {
+    throw new Error('invalid_blocked_context');
+  }
+  return { tabId: sender.tab.id, tabState, context };
+}
+
+async function saveBlockedContextToTab(tabId, context) {
+  const tabState = await loadTabState(tabId);
+  tabState._blockedContext = { ...context };
+  await saveTabState(tabId, tabState);
+}
+
+async function discardBlockedContext(tabId, nonce) {
+  const tabState = await loadTabState(tabId);
+  if (tabState._blockedContext?.nonce !== nonce) return;
+  delete tabState._blockedContext;
+  await saveTabState(tabId, tabState);
+}
+
+// ==================== 桌面风险通知 ====================
+// 通知上下文（拦截时点快照）存 session storage，按钮点击时一次性取回。
+
+const RISK_NOTIFICATION_KEY_PREFIX = 'risk_notification:';
+const RISK_NOTIFICATION_TTL_MS = 30 * 60 * 1000;
+const _riskNotificationConsumptions = new Map();
+
+function getRiskNotificationStorage() {
+  return chrome.storage.session || chrome.storage.local;
+}
+
+function getRiskNotificationStorageKey(notificationId) {
+  return RISK_NOTIFICATION_KEY_PREFIX + notificationId;
+}
+
+async function removeRiskNotificationContext(notificationId) {
+  if (!notificationId.startsWith('risk:')) return;
+  await getRiskNotificationStorage()
+    .remove(getRiskNotificationStorageKey(notificationId))
+    .catch(() => {});
+}
+
+/**
+ * 串行取出一次性通知上下文，避免同一通知被重复处理。
+ * @param {string} notificationId 通知 ID
+ * @returns {Promise<Object|null>} 未过期的通知上下文
+ */
+async function takeRiskNotificationContext(notificationId) {
+  if (!notificationId.startsWith('risk:')) return null;
+  const previous = _riskNotificationConsumptions.get(notificationId) || Promise.resolve();
+  const task = previous.catch(() => {}).then(async () => {
+    const storage = getRiskNotificationStorage();
+    const key = getRiskNotificationStorageKey(notificationId);
+    const stored = await storage.get(key);
+    await storage.remove(key);
+    const context = stored[key];
+    if (!context || Date.now() - context.createdAt > RISK_NOTIFICATION_TTL_MS) return null;
+    return context;
+  });
+  _riskNotificationConsumptions.set(notificationId, task);
+  try {
+    return await task;
+  } finally {
+    if (_riskNotificationConsumptions.get(notificationId) === task) {
+      _riskNotificationConsumptions.delete(notificationId);
+    }
+  }
+}
+
+/** 通知上下文操作的串行队列（同一通知的多个操作按序执行） */
+function queueRiskNotificationContext(notificationId, operation) {
+  const previous = _riskNotificationConsumptions.get(notificationId) || Promise.resolve();
+  const task = previous.catch(() => {}).then(operation);
+  _riskNotificationConsumptions.set(notificationId, task);
+  return (async () => {
+    try {
+      return await task;
+    } finally {
+      if (_riskNotificationConsumptions.get(notificationId) === task) {
+        _riskNotificationConsumptions.delete(notificationId);
+      }
+    }
+  })();
+}
+
+/** 通知关闭后延迟清理上下文（通知仍可见时保留，供按钮点击取回） */
+function scheduleRiskNotificationContextCleanup(notificationId) {
+  setTimeout(() => {
+    queueRiskNotificationContext(notificationId, async () => {
+      const visible = await chrome.notifications.getAll().catch(() => ({}));
+      if (!visible[notificationId]) await removeRiskNotificationContext(notificationId);
+    });
+  }, 300);
+}
+
+/**
+ * 发送与危险标签页绑定的桌面风险通知。
+ * @param {number} tabId 危险标签页 ID
+ * @param {Object} tabState 当前风险状态
+ * @returns {Promise<boolean>} 通知是否成功创建
+ */
+async function showDesktopRiskNotification(tabId, tabState) {
+  let notificationId = '';
+  try {
+    if (typeof chrome.notifications.getPermissionLevel === 'function') {
+      const permission = await chrome.notifications.getPermissionLevel();
+      if (permission !== 'granted') {
+        console.warn('[ServiceWorker] 桌面通知权限未开启:', permission);
+        return false;
+      }
+    }
+
+    const createdAt = Date.now();
+    notificationId = `risk:${tabId}:${createdAt}`;
+    await getRiskNotificationStorage().set({
+      [getRiskNotificationStorageKey(notificationId)]: {
+        tabId,
+        url: tabState.url || '',
+        domain: tabState.domain || '',
+        correctUrl: tabState.correctUrl || '',
+        navigationGeneration: tabState.navigationGeneration ?? 0,
+        analysisDocumentId: tabState.analysisDocumentId || '',
+        createdAt
+      }
+    });
+    await chrome.notifications.create(notificationId, {
+      type: 'basic',
+      iconUrl: chrome.runtime.getURL('icons/icon128.png'),
+      title: '银狐木马检测 - 风险警告',
+      message: `检测到疑似钓鱼网站: ${tabState.domain}\n风险评分: ${tabState.score}分${tabState.correctUrl ? '\n正确官网: ' + tabState.correctUrl : ''}`,
+      priority: 2,
+      buttons: tabState.correctUrl ? [{ title: '前往官网' }] : [],
+      requireInteraction: true
+    });
+    console.log('[ServiceWorker] 桌面风险通知已发送:', notificationId);
+    return true;
+  } catch (error) {
+    if (notificationId) await removeRiskNotificationContext(notificationId);
+    console.error('[ServiceWorker] 桌面风险通知发送失败:', error);
+    return false;
+  }
+}
+
+// ==================== 分析结果持久化（竞态安全） ====================
+
+/** 当前导航身份未变时才保存 tabState（防止覆盖新页面状态） */
+async function saveAnalysisStateIfCurrent(tabId, tabState, identity) {
+  if (!await isCurrentAnalysisIdentity(tabId, identity)) return false;
+  await saveTabState(tabId, tabState);
+  return isCurrentAnalysisIdentity(tabId, identity);
+}
+
+/** 当前导航身份未变时才写缓存；写后身份变化则回滚本次缓存写入 */
+async function cacheAnalysisIfCurrent(tabId, identity, domain, data) {
+  if (!await isCurrentAnalysisIdentity(tabId, identity)) return false;
+  const writeToken = createBlockedNonce();
+  await CacheManager.set(domain, { ...data, writeToken });
+  if (await isCurrentAnalysisIdentity(tabId, identity)) return true;
+
+  const cached = await CacheManager.get(domain);
+  if (cached?.writeToken === writeToken) await CacheManager.remove(domain);
+  return false;
+}
+
+/** 移除所有已白名单标签页的下载拦截脚本并恢复蓝色徽章 */
+async function removeBlockersFromWhitelistedTabs() {
+  const tabs = await chrome.tabs.query({});
+  await Promise.all(tabs.map(async (tab) => {
+    if (!tab.id || !tab.url || !await isWhitelisted(tab.url)) return;
+    await removeDownloadBlocker(tab.id);
+    setIconWhitelist(tab.id);
+  }));
+}
+
 /**
  * 触发高危响应：
  * 1. 图标变红（总是执行）
@@ -762,33 +1060,6 @@ async function triggerWarningFlow(tabId, tabState, stage = 'postload') {
   await Promise.all([bannerTask, blockerTask, notificationTask]);
   if (settings.autoOpenRiskReport === true) {
     await openRiskReport(tabId, tabState, { automatic: true, stage });
-  }
-
-  // 去重检查：同标签页冷却期内跳过通知和弹窗
-  const cooldownMs = getEffectiveThreshold('warning_cooldownMs', WARNING_COOLDOWN_MS);
-  const lastTime = _warningCooldown.get(tabId) || 0;
-  if (now - lastTime < cooldownMs) {
-    console.log('[ServiceWorker] ⚠️ 冷却期内，跳过重复弹窗:', domain);
-    return;
-  }
-  _warningCooldown.set(tabId, now);
-
-  // 4. 桌面通知（可通过设置关闭）
-  if (settings.desktopNotifications !== false) {
-    chrome.notifications.create({
-      type: 'basic',
-      iconUrl: 'icons/icon128.png',
-      title: '⚠️ 银狐木马检测 - 风险警告',
-      message: `检测到疑似钓鱼网站: ${domain}\n风险评分: ${score}分${correctUrl ? '\n正确官网: ' + correctUrl : ''}`,
-      priority: 2,
-      buttons: correctUrl ? [{ title: '✅ 前往官网' }] : [],
-      requireInteraction: true
-    }).catch(() => {});
-  }
-
-  // 5. 创建警告窗口（可通过设置关闭）
-  if (settings.showWarningWindow !== false) {
-    openWarningWindow(tabState);
   }
 
   console.log('[ServiceWorker] ⚠️ 高危响应已触发:', { domain, score, correctUrl });
@@ -1874,7 +2145,7 @@ async function analyzePage(tabId, url, domain, pageMetrics, linkMetrics) {
     }
   }
 
-  const settings = await getSettings();
+  // 注意：settings 已在函数顶部（line ~1800）声明，此处不再重复声明
 
   // ==================== Gate 失败：仅 Rule 1 + Whois（域名年龄完整贡献，无上限） ====================
   if (!needsDetection) {
@@ -2428,6 +2699,14 @@ async function _postReportToWorker(reportType, domain, note, reportContext = {})
 // webNavigation 事件本身不可阻塞，因此使用导航令牌防止异步读取完成后误伤新导航。
 const _preflightNavigationTokens = new Map();
 const _pendingSoftPreflightWarnings = new Map();
+
+// 导航追踪状态（模块级，服务 worker 生命周期内有效）：
+// _navigationGenerations — tabId → 导航代数（每次 onBeforeNavigate 自增）
+// _navigationStates     — tabId → { generation, url, previousUrl, committed, documentId }
+// _lastCommittedHttpUrls— tabId → 最近一次已提交的 http(s) URL（供“返回上一页”安全链接用）
+const _navigationGenerations = new Map();
+const _navigationStates = new Map();
+const _lastCommittedHttpUrls = new Map();
 
 async function runNavigationPreflight(details) {
   if (details.frameId !== 0 || shouldSkipUrl(details.url)) return;
