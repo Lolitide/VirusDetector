@@ -41,7 +41,14 @@
 
 ## 安装方式
 
-### Chrome
+### 插件应用商店
+
+- [Firefox](https://addons.mozilla.org/zh-CN/firefox/addon/virus-detector-llt/)
+- [Microsoft Edge](https://microsoftedge.microsoft.com/addons/detail/pcjbcceiandoeeamdhcnkcleedngeeim)
+
+### 本地安装
+
+- Chrome
 
 1. 下载本项目源码或 `git clone`
 2. 打开 `chrome://extensions/`
@@ -49,7 +56,7 @@
 4. 点击「加载已解压的扩展程序」
 5. 选择项目根目录 `VirusDetector/`
 
-### Edge
+- Edge
 
 1. 下载本项目源码或 `git clone`
 2. 打开 `edge://extensions/`
@@ -514,17 +521,6 @@ Timeline:  document_start       page load        content script reports      use
 ### 图标系统
 
 弹窗 UI 使用内联 SVG 图标系统，定义在 `popup/popup.js` 的 `ICONS` 常量中。所有图标均可通过修改对应 SVG 字符串来更换，无需依赖外部资源。
-
-## Star History
-
-<a href="https://www.star-history.com/#Lolitide/VirusDetector&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=Lolitide/VirusDetector&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=Lolitide/VirusDetector&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=Lolitide/VirusDetector&type=date&legend=top-left" />
- </picture>
-</a>
----
 
 ## License
 
